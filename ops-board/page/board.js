@@ -498,9 +498,10 @@
       // 百分比项上限就是 100%，不再重复写已用 / 上限 / 剩余
       if (unit === '%') fig = '';
       else {
-        fig = '已用 <b>' + num(e.id, unit, e.used) + '</b> / 上限 ' + esc(fmt(unit, e.limit)) +
-          '<span class="gap"> </span>剩余 <b>' + num(e.id + ':left', unit, Math.max(0, e.limit - e.used)) + '</b>';
-        if (e.used > e.limit) fig += '<span class="gap"> </span>超出 <b>' + num(e.id + ':over', unit, e.used - e.limit) + '</b>';
+        // 「已用 X」「上限 Y」「剩余 N」「超出 N」各自整段不拆，折行只发生在段与段之间
+        fig = '<span class="nw">已用 <b>' + num(e.id, unit, e.used) + '</b></span> / <span class="nw">上限 ' + esc(fmt(unit, e.limit)) + '</span>' +
+          '<span class="gap"> </span><span class="nw">剩余 <b>' + num(e.id + ':left', unit, Math.max(0, e.limit - e.used)) + '</b></span>';
+        if (e.used > e.limit) fig += '<span class="gap"> </span><span class="nw">超出 <b>' + num(e.id + ':over', unit, e.used - e.limit) + '</b></span>';
       }
     }
 
@@ -818,7 +819,7 @@
         '<div class="row-head"><span class="row-name">' + esc((dayLabel(budget.day) ? dayLabel(budget.day) + '（UTC 日）' : '今日') + '已用') + '</span><span class="row-right"><span class="row-pct">' + num('budget:pct', 'pct', pct) + '</span></span></div>' +
         '<div class="meter" data-k="budget:bar" data-p="' + p + '" style="--p:' + p + '%" aria-hidden="true"><span class="meter-fill"></span></div>' +
         '<p class="row-fig">已用 <b>' + num('budget', '行', budget.used) + '</b> / 预算 ' + esc(fmt('行', budget.limit)) +
-        (budget.used > budget.limit ? '<span class="gap"> </span>超出 <b>' + num('budget:over', '行', budget.used - budget.limit) + '</b>，之后的查询会跳过' : '<span class="gap"> </span>剩余 <b>' + num('budget:left', '行', budget.limit - budget.used) + '</b>') + '</p>' +
+        (budget.used > budget.limit ? '<span class="gap"> </span><span class="nw">超出 <b>' + num('budget:over', '行', budget.used - budget.limit) + '</b></span>，之后的查询会跳过' : '<span class="gap"> </span><span class="nw">剩余 <b>' + num('budget:left', '行', budget.limit - budget.used) + '</b></span>') + '</p>' +
         '<p class="row-note">只算本机采集的查询，已经包含在 Cloudflare 的 D1 读行里，不要相加</p></li></ul>';
     }
     return card('business', all, tiles + memberList + budgetHtml, '只看趋势，没有人数上限');

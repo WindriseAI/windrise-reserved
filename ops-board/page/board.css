@@ -46,6 +46,14 @@
   --ease: cubic-bezier(.23, 1, .32, 1);
   --dur-state: 180ms;
   --dur-enter: 240ms;
+
+  /* 以下给登录页用，值同 design-system/tokens.css 同名令牌 */
+  --glass-2: rgba(255, 255, 255, 0.9);
+  --press: rgba(20, 23, 28, 0.08);
+  --dur-press: 120ms;
+  --primary-fill: #14171C;
+  --primary-fill-hover: #2B3038;
+  --on-primary: #FFFFFF;
 }
 
 * { box-sizing: border-box; }
@@ -379,4 +387,83 @@ a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-r
 
 @media (prefers-reduced-motion: reduce) {
   .is-live .meter-fill { transition: none; }
+}
+
+/*
+ * 登录页（login.html）。沿用本页的卡片、标题和提示框，控件写法同 design-system/components.css 的
+ * wr-field / wr-input / wr-btn--primary。字号仍是四档：28 标题、16 输入和按钮、14 记住我和提示、12 标签。
+ * 输入框用 16 号，手机上点进去不会被浏览器放大。低频页面，不加进场动画；只有按钮按下 scale(.97)。
+ */
+.login {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--sp-6) + env(safe-area-inset-top)) calc(var(--sp-4) + env(safe-area-inset-right))
+    calc(var(--sp-6) + env(safe-area-inset-bottom)) calc(var(--sp-4) + env(safe-area-inset-left));
+}
+.login-card { width: 100%; max-width: 360px; padding: var(--sp-8) var(--sp-6) var(--sp-6); }
+.login-card .title { margin-bottom: var(--sp-6); }
+.login-field { display: grid; gap: 6px; margin-bottom: var(--sp-4); }
+.login-label { font-size: var(--fs-12); font-weight: 500; color: var(--sub); }
+.login-input {
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  padding: 0 var(--sp-3);
+  border: 0.75px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--glass-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-16);
+  transition: border-color var(--dur-state) var(--ease), box-shadow var(--dur-state) var(--ease);
+}
+.login-input:focus { outline: none; border-color: var(--ink3); box-shadow: 0 0 0 3px var(--press); }
+.login-remember {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-2);
+  cursor: pointer;
+  user-select: none;
+}
+.login-remember input { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--primary-fill); cursor: pointer; }
+/* 后端把 <!--LOGIN_MESSAGE--> 换成一条 role=alert 提示（账号或密码不对 / 尝试太多），样式同页上的 .notice */
+.login-card [role="alert"] {
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  color: var(--ink);
+  font-size: var(--fs-14);
+  line-height: var(--lh-body);
+}
+.login-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  padding: 0 var(--sp-6);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--primary-fill);
+  color: var(--on-primary);
+  font: inherit;
+  font-size: var(--fs-16);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--dur-state) var(--ease), transform var(--dur-press) var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .login-btn:hover { background: var(--primary-fill-hover); }
+}
+.login-btn:active { transform: scale(.97); }
+.login-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .login-input, .login-btn { transition: none; }
 }
