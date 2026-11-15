@@ -31,12 +31,11 @@ const rows = [
   ['aliyun.yesterday_bill', 'aliyunBilling', '昨日账单应付金额', 'CNY', null, 'asia-shanghai-yesterday'],
   ['mail.total_free', 'directMail', 'DirectMail累计赠额已用', '封', 2_000, 'lifetime'],
   ['mail.daily_free', 'directMail', 'DirectMail当日赠额已用', '封', 200, 'provider-day'],
-  ['server.expiry_days', 'swas', '轻量服务器距到期天数', '天', null, 'as-of-collection'],
 ];
 
 export const CATALOG = rows.map(([id, source, label, unit, limit, period]) => ({
   id, source, label, unit, limit, period,
-  refreshMs: id.startsWith('business.members.') || id === 'aliyun.yesterday_bill' || source === 'swas' ? DAY
+  refreshMs: id.startsWith('business.members.') || id === 'aliyun.yesterday_bill' ? DAY
     : source === 'businessD1' ? 6 * HOUR : 15 * MINUTE,
 })).concat(EXTRA_CATALOG);
 
@@ -54,22 +53,25 @@ export function freshValue(used, now, extra = {}) {
 
 export function buildSnapshot(cache, results, now, budget) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date(now).toISOString(),
     mode: results.mode,
     limitsBasis: 'Cloudflare Free / R2 Standard reference; DirectMail initial gift reference',
-    metrics: CATALOG.map(def => {
-      const value = cache[def.id];
-      const issue = results.issues[def.id];
-      const missing = results.missing.includes(def.source);
+    metrics: CATALOG.map(def => buildMetric(def, cache[def.id], results.issues[def.id], now, results.missing.includes(def.source))),
+    businessReadBudget: budget,
+  };
+}
+
+export function buildMetric(def, value, issue, now, missing = false) {
       const age = value ? now - Date.parse(value.collectedAt) : Infinity;
       let status = '正常';
       if (missing) status = '未接';
+      else if (issue === 'not_applicable') status = '不适用';
       else if (value && (age < 0 || age > 2 * def.refreshMs)) status = '未更新';
       else if (issue === 'read_budget') status = '未更新';
-      else if (issue === 'manual_missing' || issue === 'console_only') status = '未接';
+      else if (issue === 'manual_missing' || issue === 'console_only' || issue === 'report_missing') status = '未接';
       else if (issue || !value) status = '失败';
-      else if (def.source === 'swas' || def.expiry) {
+      else if (def.expiry) {
         if (value.used <= 7) status = '警告';
         else if (value.used <= 30) status = '关注';
       }
@@ -94,16 +96,13 @@ export function buildSnapshot(cache, results, now, budget) {
         refreshSeconds: def.refreshMs / 1000,
         staleAfterSeconds: 2 * def.refreshMs / 1000,
         ...(def.id === 'cf.d1.write' ? { thresholds: { direction: 'above', attention: 50000, warning: 80000, urgent: 90000 } } : {}),
-        ...(def.source === 'swas' || def.expiry ? { expiresAt: missing ? null : value?.expiresAt ?? null,
+        ...(def.expiry ? { expiresAt: missing ? null : value?.expiresAt ?? null,
           thresholds: { direction: 'below', attention: 30, warning: 7, urgent: 1 } } : {}),
         ...(def.manual ? { asOf: value?.asOf ?? null } : {}),
         ...(def.consoleUrl ? { consoleUrl: def.consoleUrl } : {}),
-        ...(def.source === 'localTraffic' ? { observedSince: value?.observedSince ?? null, complete: value?.complete ?? false } : {}),
+        ...(def.trafficObservation ? { observedSince: value?.observedSince ?? null, complete: false } : {}),
         // Peak storage is a capacity warning, not GB-month consumed or a charged invoice.
         accounting: def.accounting ?? (def.id === 'aliyun.yesterday_bill' ? 'reported_bill_not_cash_debited'
           : def.id.startsWith('cf.') ? 'analytics_not_invoice' : 'observed'),
       };
-    }),
-    businessReadBudget: budget,
-  };
 }

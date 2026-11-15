@@ -195,7 +195,9 @@ a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-r
 .hosts .host { padding-top: var(--sp-4); border-top: 1px solid var(--line); }
 .hosts .host:first-child { padding-top: 0; border-top: 0; }
 .host-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
-.host-title { margin: 0; font-size: var(--fs-14); font-weight: 500; }
+.host-title { min-width: 0; margin: 0; font-size: var(--fs-14); font-weight: 500; overflow-wrap: anywhere; }
+/* 实例名、地域、运行状态一行，实例名可能很长，随处可断 */
+.host-meta { overflow-wrap: anywhere; }
 .host .rows .row:first-child { padding-top: var(--sp-2); }
 .stack > .host + .host { padding-top: var(--sp-4); border-top: 1px solid var(--line); }
 @media (min-width: 720px) {
@@ -293,7 +295,7 @@ a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-r
 .dot[data-s="警告"] { background: var(--fill-warn); }
 .dot[data-s="未更新"] { box-shadow: inset 0 0 0 1.5px var(--faint); background: linear-gradient(90deg, var(--faint) 50%, transparent 50%); }
 .dot[data-s="失败"] { background: repeating-linear-gradient(135deg, var(--ink3) 0 1.5px, transparent 1.5px 3px); box-shadow: inset 0 0 0 1.5px var(--ink3); }
-.dot[data-s="未接"], .dot[data-s="未知"] { box-shadow: inset 0 0 0 1.5px var(--faint); }
+.dot[data-s="未接"], .dot[data-s="未知"], .dot[data-s="不适用"] { box-shadow: inset 0 0 0 1.5px var(--faint); }
 .badge[data-s="警告"] { background: rgba(179, 38, 30, 0.1); }
 
 /* 用量条：轨道、填充、50% 和 80% 刻度 */

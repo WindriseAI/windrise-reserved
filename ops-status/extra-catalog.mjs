@@ -11,23 +11,24 @@ const expiry = { expiry: true, refreshMs: 86400000 };
 const manual = { manual: true, refreshMs: 86400000, accounting: 'manual_as_of' };
 const item = (id, source, label, unit, options = {}) => ({ id, source, label, unit, limit: null, period: 'as-of-collection', refreshMs: 900000, ...options });
 export const EXTRA_CATALOG = [
-  ...['aleg', 'hwa', 'hwb', 'raksmart'].flatMap(host => [
-    item(`server.${host}.reachable`, host === 'raksmart' ? 'localHost' : 'connectivity', `${host} 连通`, '布尔'),
-    ...['cpu', 'memory', 'disk'].map(name => item(`server.${host}.${name}`, host === 'raksmart' ? 'localHost' : 'cloudMonitor', `${host} ${name === 'cpu' ? 'CPU' : name === 'memory' ? '内存已用' : '磁盘已用'}`, host === 'aleg' && name !== 'cpu' ? '字节' : '%', { limit: host === 'aleg' && name !== 'cpu' ? null : 100, decimal: host !== 'aleg' || name === 'cpu' })),
-    ...(host === 'raksmart' ? [item(`server.${host}.uptime`, 'localHost', 'RakSmart 运行时间', '秒')] : []),
+  ...['hwa', 'hwb', 'raksmart'].flatMap(host => [
+    item(`server.${host}.reachable`, host === 'raksmart' ? 'vps' : 'connectivity', host === 'raksmart' ? 'RakSmart 本机上报' : `${host} 连通`, '布尔'),
+    ...['cpu', 'memory', 'disk'].map(name => item(`server.${host}.${name}`, host === 'raksmart' ? 'vps' : 'cloudMonitor', `${host} ${name === 'cpu' ? 'CPU' : name === 'memory' ? '内存已用' : '磁盘已用'}`, '%', { limit: 100, decimal: true })),
+    ...(host === 'raksmart' ? [item(`server.${host}.uptime`, 'vps', 'RakSmart 运行时间', '秒')] : []),
   ]),
   ...['hwa', 'hwb'].flatMap(host => [
     item(`server.${host}.hourly_price`, 'huawei', `${host} ECS 实例每小时询价`, 'CNY/小时', { decimal: true, refreshMs: 86400000, accounting: 'quote_compute_only_not_invoice' }),
     item(`server.${host}.billing_mode`, 'huawei', `${host} 计费模式`, '枚举', { refreshMs: 86400000 }),
   ]),
-  item('server.aleg.traffic', 'swasTraffic', '轻量服务器周期出网流量', '字节', { period: 'provider-month' }),
   item('huawei.cash', 'huawei', '华为云现金余额', 'CNY', { decimal: true, lowWarning: 20 }),
   item('huawei.coupons', 'huawei', '华为云有效代金券余额', 'CNY', { decimal: true, refreshMs: 86400000, accounting: 'coupon_restrictions_not_cash' }),
   item('server.cloady.reachable', 'connectivity', 'Cloady HTTPS 连通', '布尔'),
   item('server.raksmart.expiry_days', 'manual', 'RakSmart 账单距到期天数', '天', { ...manual, ...expiry }),
   item('server.raksmart.monthly_price', 'manual', 'RakSmart 月费', 'USD/月', { ...manual, decimal: true }),
   ...[['traffic', '字节'], ['requests', '次'], ['cpu_hours', '小时'], ['memory_gb_hours', 'GB小时']].map(([name, unit]) => item(`server.cloady.${name}`, 'cloady', `Cloady 本月${name}`, unit, { period: 'utc-month', decimal: true })),
-  item('server.raksmart.traffic', 'localTraffic', 'RakSmart 本机累计月流量', '字节', { period: 'utc-month', limit: 1024 * 1000000000, accounting: 'local_interface_since_observation_not_provider_invoice' }),
+  item('server.raksmart.traffic', 'subscription', '订阅套餐已用流量', '字节', { period: 'provider-cycle', accounting: 'subscription_userinfo_upload_plus_download' }),
+  item('server.raksmart.subscription_expiry_days', 'subscription', '订阅套餐距到期天数', '天', expiry),
+  item('server.raksmart.host_traffic', 'vps', 'RakSmart 本机观测月流量', '字节', { period: 'utc-month', limit: 1024 * 1000000000, trafficObservation: true, accounting: 'local_interface_since_observation_not_provider_invoice' }),
   ...['day', 'month'].flatMap(period => [
     item(`sms.${period}.sent`, 'aliyunSms', `短信${period === 'day' ? '今日' : '本月'}计费发送条数`, '条', { period: `asia-shanghai-${period}` }),
     item(`sms.${period}.success`, 'aliyunSms', `短信${period === 'day' ? '今日' : '本月'}成功回执`, '条', { period: `asia-shanghai-${period}` }),

@@ -8,9 +8,9 @@
 
   var REFETCH_MS = 60000;
   var RETICK_MS = 30000;
-  var STATUSES = ['正常', '关注', '警告', '未接', '失败', '未更新'];
+  var STATUSES = ['正常', '关注', '警告', '未接', '失败', '未更新', '不适用'];
   // 一眼要先看到的排前面
-  var SEVERITY = { '警告': 6, '失败': 5, '未更新': 4, '关注': 3, '未知': 2, '未接': 1, '正常': 0 };
+  var SEVERITY = { '警告': 6, '失败': 5, '未更新': 4, '关注': 3, '未知': 2, '未接': 1, '正常': 0, '不适用': -1 };
   var COUNT_ORDER = ['警告', '关注', '未更新', '失败', '未接', '正常'];
 
   var NAMES = {
@@ -50,12 +50,14 @@
     'sms.month.estimated_cost': '本月估算费用',
     'sms.package_remaining': '有效资源包余量',
     'tencent_ses.month.sent': '本月通过数量',
-    'tencent_ses.gift_remaining': '剩余赠额'
+    'tencent_ses.gift_remaining': '剩余赠额',
+    'aliyunServers': '阿里云服务器'
   };
 
   // 服务器分主机显示：行内用短名，「需要留意」里用主机名 + 短名
   var HOSTS = [
-    ['raksmart', 'RakSmart VPS', ['reachable', 'cpu', 'memory', 'disk', 'uptime', 'traffic', 'expiry_days', 'monthly_price']],
+    // 第二版：订阅套餐流量和订阅到期是独立两项；本机流量另算，三者不相加
+    ['raksmart', 'RakSmart VPS', ['reachable', 'cpu', 'memory', 'disk', 'uptime', 'host_traffic', 'traffic', 'subscription_expiry_days', 'expiry_days', 'monthly_price']],
     ['aleg', '阿里云轻量服务器', ['reachable', 'cpu', 'memory', 'disk', 'traffic', '@server.expiry_days']],
     ['hwa', '华为云 hwa', ['reachable', 'cpu', 'memory', 'disk', 'hourly_price', 'billing_mode']],
     ['hwb', '华为云 hwb', ['reachable', 'cpu', 'memory', 'disk', 'hourly_price', 'billing_mode']],
@@ -64,8 +66,28 @@
   var HOST_SHORT = {
     reachable: '连通', cpu: 'CPU', memory: '内存已用', disk: '磁盘已用', uptime: '运行时间', traffic: '本月流量',
     expiry_days: '到期', monthly_price: '月费', hourly_price: '计算实例每小时询价', billing_mode: '计费模式',
-    requests: '本月请求', cpu_hours: '本月 CPU 时长', memory_gb_hours: '本月内存用量'
+    requests: '本月请求', cpu_hours: '本月 CPU 时长', memory_gb_hours: '本月内存用量',
+    host_traffic: '本机本月流量', subscription_expiry_days: '订阅到期'
   };
+
+  // 阿里云实例（第二版 aliyunServers，台数不固定）：类型、地域、运行状态、计费方式的人话
+  var ALI_TYPES = { swas: '阿里云轻量服务器', ecs: '阿里云 ECS' };
+  var ALI_REGIONS = {
+    'cn-qingdao': '华北 1（青岛）', 'cn-beijing': '华北 2（北京）', 'cn-zhangjiakou': '华北 3（张家口）', 'cn-huhehaote': '华北 5（呼和浩特）',
+    'cn-wulanchabu': '华北 6（乌兰察布）', 'cn-hangzhou': '华东 1（杭州）', 'cn-shanghai': '华东 2（上海）', 'cn-nanjing': '华东 5（南京）',
+    'cn-fuzhou': '华东 6（福州）', 'cn-shenzhen': '华南 1（深圳）', 'cn-heyuan': '华南 2（河源）', 'cn-guangzhou': '华南 3（广州）',
+    'cn-chengdu': '西南 1（成都）', 'cn-hongkong': '中国香港', 'ap-southeast-1': '新加坡', 'ap-northeast-1': '日本（东京）',
+    'ap-northeast-2': '韩国（首尔）', 'us-west-1': '美国（硅谷）', 'us-east-1': '美国（弗吉尼亚）', 'eu-central-1': '德国（法兰克福）'
+  };
+  var ALI_STATES = { Running: '运行中', Starting: '启动中', Stopping: '停止中', Stopped: '已停止', Pending: '准备中', Rebooting: '重启中',
+    Resetting: '重置中', Expired: '已过期', Disabled: '已停用', Unknown: '运行状态未知' };
+  var ALI_BILLING = { prepaid: '预付费', postpaid: '按量付费', unknown: '计费方式未知' };
+  var ALI_ACTIONS = { ListRegions: '地域列表', DescribeRegions: '地域列表', ListInstances: '实例列表', DescribeInstances: '实例列表',
+    DescribeMonitorData: '监控数据', DescribeInstanceMonitorData: '监控数据', DescribeMetricLast: '监控数据', ListInstancesTrafficPackages: '流量包' };
+  var ALI_ORDER = ['reachable', 'cpu', 'memory', 'disk', 'traffic', 'expiry_days'];
+  var ALI_ID = /^aliyun\.([a-f0-9]{24})\.([a-z_]+)$/;
+  // 指标 id -> 所属实例，渲染时由快照填
+  var instanceOf = {};
   // 主机控制台只放已核实的地址；其余主机没有可靠后台链接，不编
   var HOST_CONSOLE = { aleg: ['阿里云轻量应用服务器控制台', 'https://swas.console.aliyun.com/#/servers'] };
   var DOMAINS = [['windrisebridge_com', 'windrisebridge.com'], ['windrisebridge_cn', 'windrisebridge.cn'], ['windrise_si', 'windrise.si'], ['secrethq_shop', 'secrethq.shop']];
@@ -96,7 +118,8 @@
     'lifetime': '累计',
     'provider-day': '按邮件推送服务的当日口径',
     'provider-month': '按服务商账期累计',
-    'asia-shanghai-month': '北京时间本月'
+    'asia-shanghai-month': '北京时间本月',
+    'provider-cycle': '按订阅套餐周期累计'
   };
 
   var REASONS = {
@@ -110,8 +133,19 @@
     stale: '数据已超过更新周期',
     manual_missing: '待填，还没有手填',
     console_only: '没有只读接口，只能在后台看',
-    unsupported_billing_mode: '不是按需计费，查不到每小时价格'
+    unsupported_billing_mode: '不是按需计费，查不到每小时价格',
+    not_applicable: '此项不适用',
+    report_missing: '还没有收到这台 VPS 的本机上报'
   };
+
+  // 同一个 reason 在不同指标上意思不同，按 id 换成具体的话
+  function reasonText(e) {
+    var ali = ALI_ID.exec(e.id);
+    if (ali && ali[2] === 'expiry_days' && e.reason === 'not_applicable') return '按量付费，没有到期时间';
+    if (ali && ali[2] === 'reachable' && e.reason === 'not_applicable') return '没有已知的探测端口，不探测；运行状态见上面';
+    if (e.id === 'server.raksmart.subscription_expiry_days' && e.reason === 'dataset_unavailable') return '订阅没有给出到期时间';
+    return REASONS[e.reason];
+  }
 
   var BACKEND = [
     ['Cloudflare 账单与发票', 'https://dash.cloudflare.com/?to=/:account/billing', '最终费用以发票为准，本页只是平台统计的用量'],
@@ -218,9 +252,10 @@
     var limit = typeof m.limit === 'number' && isFinite(m.limit) ? m.limit : null;
     var status = STATUSES.indexOf(m.status) >= 0 ? m.status : '未知';
     var reason = m.reason || null;
+    if (reason === 'not_applicable') { status = '不适用'; used = null; }
     var collected = m.collectedAt ? Date.parse(m.collectedAt) : NaN;
     var age = isFinite(collected) ? t - collected : null;
-    if (status !== '未接' && age !== null) {
+    if (status !== '未接' && status !== '不适用' && age !== null) {
       if (age < 0) { status = '未更新'; reason = 'clock_rollback'; }
       else if (typeof m.staleAfterSeconds === 'number' && age > m.staleAfterSeconds * 1000) { status = '未更新'; reason = reason === 'read_budget' ? reason : 'stale'; }
     }
@@ -249,6 +284,13 @@
 
   function shortName(e) {
     if (e.id === 'server.expiry_days') return '到期';
+    if (e.id === 'server.raksmart.traffic' && e.m.source === 'subscription') return '订阅流量';
+    if (e.id === 'server.raksmart.reachable' && e.m.source === 'vps') return '本机上报';
+    var ali = ALI_ID.exec(e.id);
+    if (ali) {
+      if (ali[2] === 'traffic' && e.m.period === 'last-15-minutes') return '近 15 分钟出流量';
+      return HOST_SHORT[ali[2]] || e.m.label || e.id;
+    }
     var m = /^server\.[a-z]+\.([a-z_]+)$/.exec(e.id);
     if (m && HOST_SHORT[m[1]]) return HOST_SHORT[m[1]];
     var d = /^(?:domain|cert)\.([a-z_]+)\.expiry_days$/.exec(e.id);
@@ -263,6 +305,7 @@
 
   // 全名：跨组列表（需要留意）里用，带主机或证书前缀
   function name(e) {
+    if (instanceOf[e.id]) return instanceOf[e.id].fullTitle + ' ' + shortName(e);
     var h = hostOf(e.id);
     if (h) return h[1] + ' ' + shortName(e);
     if (/^cert\./.test(e.id)) return shortName(e) + ' 证书到期';
@@ -285,10 +328,10 @@
     var parts = [];
     var when = e.collected ? '，下面是 ' + beijing(e.collected) + ' 采集的旧值' : '，下面是上次的旧值';
     if (e.status === '未更新' && e.used !== null) {
-      var why = (e.reason === 'stale' || !REASONS[e.reason]) && e.age !== null ? '已停更 ' + duration(e.age) : (REASONS[e.reason] || '本次未更新');
+      var why = (e.reason === 'stale' || !reasonText(e)) && e.age !== null ? '已停更 ' + duration(e.age) : (reasonText(e) || '本次未更新');
       parts.push(why + when);
     } else if (e.status === '失败' && e.used !== null) {
-      parts.push((REASONS[e.reason] || '本次读取失败') + when);
+      parts.push((reasonText(e) || '本次读取失败') + when);
     } else if (e.collected && groupTime && e.collected !== groupTime) {
       parts.push(beijing(e.collected) + ' 采集');
     }
@@ -296,9 +339,10 @@
   }
 
   function missingText(e) {
-    if (e.status === '未接') return REASONS[e.reason] || REASONS.key_missing;
+    if (e.status === '不适用') return reasonText(e) || '此项不适用';
+    if (e.status === '未接') return reasonText(e) || REASONS.key_missing;
     if (e.status === '未知') return '数值未知，不按 0 计算';
-    var r = REASONS[e.reason];
+    var r = reasonText(e);
     if (e.status === '未更新') return (r || '本次未更新') + '，暂时没有数值';
     return (r || '读取失败') + '，暂时没有数值';
   }
@@ -406,10 +450,14 @@
   function hostRow(e, t) {
     var unit = e.m.unit;
     if (isExpiry(e)) return expiryRow(e, t);
+    if (unit === '布尔' && e.m.source === 'vps') return valueRow(e, t, null, null, e.used === 1 ? '已收到' : '');
     if (unit === '布尔') return valueRow(e, t, null, null, e.used === 1 ? '连得上' : e.used === 0 ? '连不上' : '');
     if (unit === '枚举') return valueRow(e, t, null, null, BILLING_MODES[e.used] || '未知方式');
     if (e.m.accounting === 'quote_compute_only_not_invoice') return valueRow(e, t, null, ['只是计算实例询价，不含磁盘和带宽，不是账单']);
-    if (e.m.source === 'localTraffic') return meterRow(e, t, null, trafficGap(e));
+    if (e.m.source === 'localTraffic' || e.m.complete === false) return meterRow(e, t, null, trafficGap(e));
+    if (e.m.source === 'subscription') return meterRow(e, t, null, { notes: ['订阅的上传加下载，不是 RakSmart 网卡账单，和本机流量不能相加'] });
+    if (e.m.accounting === 'ecs_monitor_outgoing_not_invoice') return valueRow(e, t, null, ['云监控的出方向流量，不是账单']);
+    if (/最高磁盘/.test(e.m.label || '') && ALI_ID.test(e.id)) return meterRow(e, t, null, { notes: ['取各块磁盘中最高的'] });
     if (e.limit !== null || unit === '%') return meterRow(e, t);
     return valueRow(e, t);
   }
@@ -582,22 +630,108 @@
     return card('mail', all, inner);
   }
 
-  function serverCard(byId) {
+  // rows 省略时就是 list；徽标始终按整块 list 取最严重的
+  function hostBlock(title, list, meta, extra, link, rows) {
+    var t = groupTimeOf(list);
+    rows = rows || list;
+    return '<section class="host" aria-label="' + esc(title) + '"><div class="host-head"><h3 class="host-title">' + esc(title) + '</h3>' + badge(worst(list)) + '</div>' +
+      (meta ? '<p class="row-note host-meta">' + esc(meta) + '</p>' : '') +
+      (rows.length ? '<ul class="rows">' + rows.map(function (e) { return hostRow(e, t); }).join('') + '</ul>' : '') +
+      (extra || '') + (link ? '<p class="row-note">后台：' + link + '</p>' : '') + '</section>';
+  }
+
+  // 第二版 aliyunServers：形状不对就当没有，不让整页出错
+  function readAliyun(raw, t) {
+    instanceOf = {};
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.instances)) return null;
+    var metrics = [];
+    var instances = raw.instances.filter(function (inst) {
+      return inst && typeof inst.id === 'string' && /^[a-f0-9]{24}$/.test(inst.id) && Array.isArray(inst.metrics);
+    }).map(function (inst) {
+      var label = ALI_TYPES[inst.type] || '阿里云服务器';
+      var instName = typeof inst.name === 'string' && inst.name ? inst.name : '未命名实例';
+      var title = inst.alias === 'aleg' ? ALI_TYPES.swas : label + ' ' + instName;
+      var info = { id: inst.id, type: inst.type, alias: inst.alias, name: instName, regionId: String(inst.regionId || ''),
+        status: inst.status, billingMode: inst.billingMode, title: title, fullTitle: title };
+      inst.metrics.forEach(function (m) {
+        if (!m || typeof m.id !== 'string' || m.id.indexOf('aliyun.' + inst.id + '.') !== 0) return;
+        instanceOf[m.id] = info;
+        metrics.push(evaluate(m, t));
+      });
+      return info;
+    });
+    var status = STATUSES.indexOf(raw.status) >= 0 ? raw.status : '未知';
+    // 一台都没读到又不是正常：给一个整体项，让总数和「另有 N 项」不漏掉它
+    var entry = !instances.length && status !== '正常'
+      ? evaluate({ id: 'aliyunServers', label: '阿里云服务器', status: status, reason: raw.reason || null, used: null, limit: null, collectedAt: raw.collectedAt || null }, t)
+      : null;
+    return { instances: instances, metrics: metrics, entry: entry, collectedAt: raw.collectedAt || null, complete: raw.complete === true,
+      counts: raw.counts, failures: Array.isArray(raw.failures) ? raw.failures : [] };
+  }
+
+  // 阿里云实例：每台一块，台数按快照；aleg 沿用「阿里云轻量服务器」块名，其余写类型 + 实例名
+  function aliyunBlocks(ali, byId) {
+    if (!ali) return { html: '', list: [], meta: '' };
+    var swasLink = linkHtml(HOST_CONSOLE.aleg[0], HOST_CONSOLE.aleg[1]);
+    var all = [];
+    var html = ali.instances.map(function (inst) {
+      var list = ALI_ORDER.map(function (k) { return byId['aliyun.' + inst.id + '.' + k]; }).filter(Boolean);
+      all = all.concat(list);
+      var meta = [inst.alias === 'aleg' ? inst.name : '', ALI_REGIONS[inst.regionId] || inst.regionId, ALI_STATES[inst.status] || ALI_STATES.Unknown, ALI_BILLING[inst.billingMode] || ALI_BILLING.unknown].filter(Boolean);
+      return hostBlock(inst.title, list, meta.join('，'), '', inst.type === 'swas' ? swasLink : '');
+    }).join('');
+    // 一台都没读到：整块写原因，计入总数（整体项在 readAliyun 里建）
+    if (!ali.instances.length && ali.entry) {
+      all.push(ali.entry);
+      html = '<section class="host" aria-label="阿里云服务器"><div class="host-head"><h3 class="host-title">阿里云服务器</h3>' + badge(ali.entry.status) + '</div>' +
+        '<p class="row-note">' + esc(missingText(ali.entry)) + '</p>' + (swasLink ? '<p class="row-note">后台：' + swasLink + '</p>' : '') + '</section>';
+    }
+    return { html: html, list: all, meta: aliyunSummary(ali) };
+  }
+
+  function aliyunSummary(ali) {
+    if (!ali.collectedAt) return '';
+    var c = ali.counts || {};
+    var n = function (k) { return typeof c[k] === 'number' ? c[k] + ' 台' : '台数未知'; };
+    var text = (ali.complete ? '阿里云实例每天自动发现一次：' : '阿里云实例发现不完整，下面只列出读到的：') + '轻量 ' + n('swas') + '，ECS ' + n('ecs');
+    var fails = (ali.failures || []).map(function (f) {
+      var where = f.regionId ? (ALI_REGIONS[f.regionId] || f.regionId) + ' ' : '';
+      return where + (f.type === 'ecs' ? 'ECS ' : '轻量') + (ALI_ACTIONS[f.action] || '数据') + (f.reason === 'permission_denied' ? '没有权限' : '读取失败');
+    });
+    if (fails.length > 3) fails = fails.slice(0, 3).concat('等 ' + fails.length + ' 处');
+    return text + (fails.length ? '；' + fails.join('，') : '');
+  }
+
+  function serverCard(byId, ali) {
     var swas = linkHtml('阿里云轻量应用服务器控制台', 'https://swas.console.aliyun.com/#/servers');
     var all = [];
+    var aliyun = aliyunBlocks(ali, byId);
     var blocks = HOSTS.map(function (h) {
       var list = h[2].map(function (k) { return byId[k.charAt(0) === '@' ? k.slice(1) : 'server.' + h[0] + '.' + k]; }).filter(Boolean);
-      if (!list.length) return '';
+      // 阿里云实例接在 RakSmart 后面，旧版的固定 aleg 块只在旧快照里出现
+      var after = h[0] === 'raksmart' ? aliyun.html : '';
+      if (!list.length) return after;
       all = all.concat(list);
-      var t = groupTimeOf(list);
       var link = HOST_CONSOLE[h[0]] ? linkHtml(HOST_CONSOLE[h[0]][0], HOST_CONSOLE[h[0]][1]) : '';
       var extra = h[0] === 'cloady' ? '<p class="row-note">用量取自 Cloady 官方接口，正式单位还在核对</p>' : '';
-      return '<section class="host" aria-label="' + esc(h[1]) + '"><div class="host-head"><h3 class="host-title">' + esc(h[1]) + '</h3>' + badge(worst(list)) + '</div>' +
-        '<ul class="rows">' + list.map(function (e) { return hostRow(e, t); }).join('') + '</ul>' + extra + (link ? '<p class="row-note">后台：' + link + '</p>' : '') + '</section>';
+      var rows = list;
+      var meta = '';
+      var vps = list.filter(function (e) { return e.m.source === 'vps'; });
+      if (vps.length) {
+        // 本机上报一项都没收到：一行写清，不逐行重复同一句原因
+        var silent = vps.length > 1 && vps.every(function (e) { return e.used === null && e.status === vps[0].status && e.reason === vps[0].reason; });
+        if (silent) {
+          rows = list.filter(function (e) { return e.m.source !== 'vps'; });
+          meta = vps.map(shortName).join('、') + '：' + missingText(vps[0]);
+        } else extra = '<p class="row-note">CPU、内存、磁盘、运行时间和本机流量由这台 VPS 自己上报</p>';
+      }
+      return hostBlock(h[1], list, meta, extra, link, rows) + after;
     }).join('');
+    all = all.concat(aliyun.list);
     // 旧版快照没有服务器指标
     if (!all.length) return card('server', [], '<p class="empty">快照里还没有服务器的指标，请先到 ' + swas + ' 查看。</p>');
-    return card('server', all, '<div class="hosts">' + blocks + '</div>', '连通只说明地址端口连得上，不代表服务可用或有人在线');
+    return card('server', all, (aliyun.meta ? '<p class="card-meta">' + esc(aliyun.meta) + '</p>' : '') + '<div class="hosts">' + blocks + '</div>',
+      '连通只说明地址端口连得上，不代表服务可用或有人在线');
   }
 
   function domainCard(byId) {
@@ -739,6 +873,7 @@
   }
 
   function groupOf(id) {
+    if (ALI_ID.test(id) || id === 'aliyunServers') return 'server';
     if (id.indexOf('cf.') === 0) return 'cloudflare';
     if (id.indexOf('aliyun.') === 0 || id.indexOf('huawei.') === 0) return 'aliyun';
     if (id.indexOf('mail.') === 0 || id.indexOf('sms.') === 0 || id.indexOf('tencent_ses.') === 0) return 'mail';
@@ -779,6 +914,8 @@
       var list = (Array.isArray(snapshot.metrics) ? snapshot.metrics : [])
         .filter(function (m) { return m && typeof m.id === 'string'; })
         .map(function (m) { return evaluate(m, t); });
+      var ali = readAliyun(snapshot.aliyunServers, t);
+      if (ali) list = list.concat(ali.metrics, ali.entry ? [ali.entry] : []);
       var byId = {};
       list.forEach(function (e) { byId[e.id] = e; });
       html += overview(list);
@@ -787,7 +924,7 @@
       var right = payCard(byId) + manualCard(byId);
       html += '<div class="stack"><div class="groups"><div class="col">' + cloudflareCard(byId) + '</div><div class="col">' +
         aliyunCard(byId) + mailCard(byId) + businessCard(byId, snapshot.businessReadBudget) + '</div></div>' +
-        serverCard(byId) +
+        serverCard(byId, ali) +
         (lower || right ? '<div class="groups"><div class="col">' + lower + '</div><div class="col">' + right + '</div></div>' : '') +
         backendCard() + '</div>';
       html += '<footer class="foot"><p>上限按 Cloudflare 免费版、R2 标准存储和 DirectMail 初始赠额参考，不是从账号识别出的套餐。</p>' +
@@ -870,7 +1007,8 @@
       var data;
       try { data = JSON.parse(text); } catch (err) { throw new Error('format'); }
       if (!data || typeof data !== 'object') throw new Error('format');
-      if (data.schemaVersion !== 1) throw new Error('version:' + String(data.schemaVersion));
+      // 1 是旧快照（固定 aleg / server.expiry_days），2 加了 aliyunServers 和 RakSmart 本机上报；两种都照常显示
+      if (data.schemaVersion !== 1 && data.schemaVersion !== 2) throw new Error('version:' + String(data.schemaVersion));
       if (!Array.isArray(data.metrics)) throw new Error('format');
       snapshot = data;
       loadProblem = null;
