@@ -63,7 +63,7 @@ async function discover(key, fetchImpl, now) {
   return { discoveredAt: now, entries, failures, counts, complete: failures.length === 0 };
 }
 export function instanceMetricDefinitions(id, type) {
-  const item = (name, label, unit, options = {}) => ({ id: `aliyun.${id}.${name}`, source: 'aliyunServers', label, unit, limit: null, period: 'as-of-collection', refreshMs: 900000, decimal: unit === '%', ...options });
+  const item = (name, label, unit, options = {}) => ({ id: `aliyun.${id}.${name}`, source: 'aliyunServers', label, unit, limit: null, period: 'as-of-collection', refreshMs: 900000, decimal: unit === '%' || name === 'memory' || name === 'disk', ...options });
   return [item('cpu', 'CPU', '%', { limit: 100 }), item('memory', '内存已用', type === 'swas' ? '字节' : '%', { limit: type === 'swas' ? null : 100 }),
     item('disk', type === 'swas' ? '磁盘已用' : '最高磁盘占用率', type === 'swas' ? '字节' : '%', { limit: type === 'swas' ? null : 100 }),
     item('traffic', type === 'swas' ? '周期公网出流量' : '近15分钟公网出流量', '字节', { period: type === 'swas' ? 'provider-month' : 'last-15-minutes', accounting: type === 'swas' ? 'provider_traffic_package' : 'ecs_monitor_outgoing_not_invoice' }),
@@ -94,12 +94,13 @@ export async function collectAliyunServers(key, fetchImpl, now, previous = null,
     if (type === 'swas') {
       for (const [name, metric] of [['cpu', 'CPU_UTILIZATION'], ['memory', 'MEMORY_ACTUALUSEDSPACE'], ['disk', 'DISKUSAGE_USED']]) {
         try {
-          const body = await api(type, regionId, 'DescribeMonitorData', key, { RegionId: regionId, InstanceId: rawId, MetricName: metric, Period: 300, StartTime: new Date(now - 900000).toISOString(), EndTime: new Date(now).toISOString(), Length: 100 }, fetchImpl, now);
+          const body = await api(type, regionId, 'DescribeMonitorData', key, { RegionId: regionId, InstanceId: rawId, MetricName: metric, Period: 300, StartTime: new Date(now - 900000).toISOString().replace(/\.\d{3}Z$/, 'Z'), EndTime: new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z'), Length: 100 }, fetchImpl, now);
           const rows = JSON.parse(body.Datapoints);
           if (!Array.isArray(rows) || !rows.length || body.NextToken) throw new Error('dataset_unavailable');
           const latest = rows.reduce((a, b) => number(a.timestamp) > number(b.timestamp) ? a : b);
-          const used = number(latest.value); const at = number(latest.timestamp);
-          if (at > now || now - at > 900000 || name === 'cpu' && used > 100 || name !== 'cpu' && !Number.isSafeInteger(used)) throw new Error('dataset_unavailable');
+          const used = number(latest.Average); const at = number(latest.timestamp);
+          // SWAS can return several unlabelled disk series; do not select one arbitrarily.
+          if (at > now || now - at > 900000 || name === 'cpu' && used > 100 || used > Number.MAX_SAFE_INTEGER || rows.some(point => number(point.timestamp) === at && number(point.Average) !== used)) throw new Error('dataset_unavailable');
           set(name, freshValue(used, at));
         } catch (error) { fail([name], 'DescribeMonitorData', error); }
       }
