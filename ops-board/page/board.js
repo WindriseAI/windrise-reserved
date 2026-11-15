@@ -212,6 +212,8 @@
   function bytes(v) {
     // 按四舍五入到一位小数后的值选单位，避免 999,995,000 字节写成「1,000 MB」
     var a = Math.abs(v);
+    // 0 不写「0 字节」：同一行的上限是 GB，单位跟着一起写 GB
+    if (v === 0) return '0 GB';
     if (a >= 999.95e6) return oneFmt.format(v / 1e9) + ' GB';
     if (a >= 999.95e3) return oneFmt.format(v / 1e6) + ' MB';
     if (a >= 999.95) return oneFmt.format(v / 1e3) + ' KB';
@@ -481,11 +483,11 @@
     if (e.used === null) {
       if (e.limit !== null && e.limit > 0) body = '<div class="meter-empty" aria-hidden="true"></div>';
       fig = missingText(e);
-      if (e.limit !== null) fig += '<span class="gap"></span>' + (e.limit === 0 ? '无可用额度' : '上限 ' + esc(fmt(unit, e.limit)));
+      if (e.limit !== null) fig += '<span class="gap"> </span>' + (e.limit === 0 ? '无可用额度' : '<span class="nw">上限 ' + esc(fmt(unit, e.limit)) + '</span>');
     } else if (e.limit === null) {
-      fig = '<b>' + num(e.id, unit, e.used) + '</b><span class="gap"></span>' + (/^cf\.dns\./.test(e.id) ? '上限未确认' : '无已知上限');
+      fig = '<b>' + num(e.id, unit, e.used) + '</b><span class="gap"> </span>' + (/^cf\.dns\./.test(e.id) ? '上限未确认' : '无已知上限');
     } else if (e.limit === 0) {
-      fig = '已用 <b>' + num(e.id, unit, e.used) + '</b><span class="gap"></span>无可用额度';
+      fig = '已用 <b>' + num(e.id, unit, e.used) + '</b><span class="gap"> </span>无可用额度';
     } else {
       var p = Math.max(0, Math.min(100, e.pct));
       var ticks = tickPositions(e).map(function (t) {
@@ -497,8 +499,8 @@
       if (unit === '%') fig = '';
       else {
         fig = '已用 <b>' + num(e.id, unit, e.used) + '</b> / 上限 ' + esc(fmt(unit, e.limit)) +
-          '<span class="gap"></span>剩余 <b>' + num(e.id + ':left', unit, Math.max(0, e.limit - e.used)) + '</b>';
-        if (e.used > e.limit) fig += '<span class="gap"></span>超出 <b>' + num(e.id + ':over', unit, e.used - e.limit) + '</b>';
+          '<span class="gap"> </span>剩余 <b>' + num(e.id + ':left', unit, Math.max(0, e.limit - e.used)) + '</b>';
+        if (e.used > e.limit) fig += '<span class="gap"> </span>超出 <b>' + num(e.id + ':over', unit, e.used - e.limit) + '</b>';
       }
     }
 
@@ -816,7 +818,7 @@
         '<div class="row-head"><span class="row-name">' + esc((dayLabel(budget.day) ? dayLabel(budget.day) + '（UTC 日）' : '今日') + '已用') + '</span><span class="row-right"><span class="row-pct">' + num('budget:pct', 'pct', pct) + '</span></span></div>' +
         '<div class="meter" data-k="budget:bar" data-p="' + p + '" style="--p:' + p + '%" aria-hidden="true"><span class="meter-fill"></span></div>' +
         '<p class="row-fig">已用 <b>' + num('budget', '行', budget.used) + '</b> / 预算 ' + esc(fmt('行', budget.limit)) +
-        (budget.used > budget.limit ? '<span class="gap"></span>超出 <b>' + num('budget:over', '行', budget.used - budget.limit) + '</b>，之后的查询会跳过' : '<span class="gap"></span>剩余 <b>' + num('budget:left', '行', budget.limit - budget.used) + '</b>') + '</p>' +
+        (budget.used > budget.limit ? '<span class="gap"> </span>超出 <b>' + num('budget:over', '行', budget.used - budget.limit) + '</b>，之后的查询会跳过' : '<span class="gap"> </span>剩余 <b>' + num('budget:left', '行', budget.limit - budget.used) + '</b>') + '</p>' +
         '<p class="row-note">只算本机采集的查询，已经包含在 Cloudflare 的 D1 读行里，不要相加</p></li></ul>';
     }
     return card('business', all, tiles + memberList + budgetHtml, '只看趋势，没有人数上限');

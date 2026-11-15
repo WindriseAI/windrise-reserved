@@ -272,7 +272,9 @@ a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-r
 .row-pct { font-weight: 500; }
 .row-fig, .row-note { margin: var(--sp-1) 0 0; color: var(--sub); font-size: var(--fs-12); }
 .row-fig b { color: var(--ink); font-weight: 500; }
-.row-fig .gap { display: inline-block; width: var(--sp-3); }
+/* 用真空格加字距：折行时空格留在上一行末尾，下一行不缩进 */
+.row-fig .gap { word-spacing: calc(var(--sp-3) - 0.25em); }
+.row-fig b, .row-fig .nw { white-space: nowrap; }
 .row-note { color: var(--sub); }
 .row-value { font-size: var(--fs-16); font-weight: 500; }
 
