@@ -65,7 +65,8 @@ export async function createBoardServer({ pageDirectory, authConfig, sessionKey,
   let writing = false; let lastVpsAt = null;
   const server = http.createServer({ maxHeaderSize: 8192, requestTimeout: 30_000, headersTimeout: 10_000 }, async (req, res) => {
     const reply = (status, body = '', extra = {}) => {
-      res.writeHead(status, { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", ...extra });
+      // no-referrer makes native form POSTs send Origin:null; keep same-origin submissions identifiable.
+      res.writeHead(status, { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", ...extra });
       res.end(req.method === 'HEAD' ? undefined : body);
       if (!req.readableEnded) req.resume();
     };
