@@ -4,13 +4,15 @@ export const CLOADY_HOST = 'windrise-reserved-ole8xig4-titaa-mutiii.cloady.io';
 export const CERTIFICATES = {
   website_cn: 'windrisebridge.cn', website_cn_www: 'www.windrisebridge.cn',
   website_en: 'windrisebridge.com', website_en_www: 'www.windrisebridge.com',
-  gateway: 'gw.windrise.si', activation: 'api.secrethq.shop', mcp: 'mcp.windrise.si', cloady: CLOADY_HOST,
+  gateway: 'gw.windrise.si', activation: 'api.secrethq.shop', mcp: 'mcp.windrise.si', ops: 'ops.windrise.si', cloady: CLOADY_HOST,
 };
+export const SERVICES = { website_cn: 'www.windrisebridge.cn', website_en: 'www.windrisebridge.com', gateway: 'gw.windrise.si', mcp: 'mcp.windrise.si', activation: 'api.secrethq.shop', ops_board: 'ops.windrise.si' };
 export const domainSlug = domain => domain.replaceAll('.', '_');
 const expiry = { expiry: true, refreshMs: 86400000 };
 const manual = { manual: true, refreshMs: 86400000, accounting: 'manual_as_of' };
 const item = (id, source, label, unit, options = {}) => ({ id, source, label, unit, limit: null, period: 'as-of-collection', refreshMs: 900000, ...options });
 export const EXTRA_CATALOG = [
+  ...Object.entries(SERVICES).map(([name, host]) => item(`service.${name}.reachable`, 'serviceHealth', host, '布尔', { service: true })),
   ...['hwa', 'hwb', 'raksmart'].flatMap(host => [
     item(`server.${host}.reachable`, host === 'raksmart' ? 'vps' : 'connectivity', host === 'raksmart' ? 'RakSmart 本机上报' : `${host} 连通`, '布尔'),
     ...['cpu', 'memory', 'disk'].map(name => item(`server.${host}.${name}`, host === 'raksmart' ? 'vps' : 'cloudMonitor', `${host} ${name === 'cpu' ? 'CPU' : name === 'memory' ? '内存已用' : '磁盘已用'}`, '%', { limit: 100, decimal: true })),
@@ -20,7 +22,7 @@ export const EXTRA_CATALOG = [
     item(`server.${host}.hourly_price`, 'huawei', `${host} ECS 实例每小时询价`, 'CNY/小时', { decimal: true, refreshMs: 86400000, accounting: 'quote_compute_only_not_invoice' }),
     item(`server.${host}.billing_mode`, 'huawei', `${host} 计费模式`, '枚举', { refreshMs: 86400000 }),
   ]),
-  item('huawei.cash', 'huawei', '华为云现金余额', 'CNY', { decimal: true, lowWarning: 20 }),
+  item('huawei.cash', 'huawei', '华为云现金余额', 'CNY', { decimal: true }),
   item('huawei.coupons', 'huawei', '华为云有效代金券余额', 'CNY', { decimal: true, refreshMs: 86400000, accounting: 'coupon_restrictions_not_cash' }),
   item('server.cloady.reachable', 'connectivity', 'Cloady HTTPS 连通', '布尔'),
   item('server.raksmart.expiry_days', 'manual', 'RakSmart 账单距到期天数', '天', { ...manual, ...expiry }),

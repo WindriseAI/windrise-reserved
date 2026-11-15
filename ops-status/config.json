@@ -1,5 +1,4 @@
 {
-  "minimumBalance": 20,
   "businessD1": { "activityReadEstimate": null, "membersReadEstimate": null },
   "estimateBasis": "Production first reads five aggregate table counts under a full 100000-row reservation, then reserves 3*(D+G+C) for activity and 3*(U+E) for members. Observed rows_read adjusts estimates by 20%; counts and basis persist in state.calibration. No production counts have been read during development.",
   "smsUnitPrice": null,

@@ -1,4 +1,5 @@
 import { EXTRA_CATALOG } from './extra-catalog.mjs';
+import { classifyReason, reasonDetail, isFinancial, isR2UnclassifiedDetail } from './reasons.mjs';
 export const MINUTE = 60_000;
 export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
@@ -65,32 +66,41 @@ export function buildSnapshot(cache, results, now, budget) {
 export function buildMetric(def, value, issue, now, missing = false) {
       const age = value ? now - Date.parse(value.collectedAt) : Infinity;
       let status = '正常';
+      const financial = isFinancial(def);
       if (missing) status = '未接';
       else if (issue === 'not_applicable') status = '不适用';
-      else if (value && (age < 0 || age > 2 * def.refreshMs)) status = '未更新';
+      else if (value && (age < 0 || age > 2 * def.refreshMs)) { status = '未更新'; issue ??= 'stale'; }
       else if (issue === 'read_budget') status = '未更新';
       else if (issue === 'manual_missing' || issue === 'console_only' || issue === 'report_missing') status = '未接';
-      else if (issue || !value) status = '失败';
+      else if (issue || !value) { status = '失败'; issue ??= 'collection_failed'; }
+      else if (financial) status = '正常';
+      else if (def.service) {
+        const code = value.httpStatus;
+        status = value.certificateValid !== true || code === null || code >= 500 ? '警告'
+          : code >= 200 && code < 400 || code === 401 ? '正常' : '关注';
+      }
       else if (def.expiry) {
         if (value.used <= 7) status = '警告';
         else if (value.used <= 30) status = '关注';
       }
-      else if ((value.lowWarning ?? def.lowWarning) !== undefined && (value.lowWarning ?? def.lowWarning) !== null) {
-        if (value.used < (value.lowWarning ?? def.lowWarning)) status = '警告';
-        else if (value.used < 2 * (value.lowWarning ?? def.lowWarning)) status = '关注';
-      } else {
+      else {
         const limit = value.limit === undefined ? def.limit : value.limit;
         if (limit === 0) status = '警告';
         else if (limit !== null && value.used >= limit * 0.8) status = '警告';
         else if (limit !== null && value.used >= limit * 0.5) status = '关注';
         if (def.unit === '布尔' && value.used === 0) status = '警告';
       }
+      const detail = missing ? 'key_missing' : issue ?? (def.service ? value?.serviceIssue ?? null : null);
+      const r2Detail = ['cf.r2.a', 'cf.r2.b'].includes(def.id) && isR2UnclassifiedDetail(value?.reasonDetail) ? value.reasonDetail : null;
+      if (r2Detail && status === '正常') status = '关注';
       return {
         id: def.id, source: def.source, label: def.label,
         used: missing ? null : value?.used ?? null,
         limit: value?.limit === undefined ? def.limit : value.limit,
         unit: value?.unit ?? def.unit, collectedAt: missing ? null : value?.collectedAt ?? null,
-        status, reason: missing ? 'key_missing' : issue ?? (status === '未更新' ? 'stale' : null),
+        status, reason: classifyReason(detail),
+        reasonDetail: reasonDetail(detail ?? r2Detail),
+        alertEligible: !financial && status !== '不适用',
         period: def.period,
         periodDate: value?.billingDate ?? null,
         refreshSeconds: def.refreshMs / 1000,
@@ -101,6 +111,7 @@ export function buildMetric(def, value, issue, now, missing = false) {
         ...(def.manual ? { asOf: value?.asOf ?? null } : {}),
         ...(def.consoleUrl ? { consoleUrl: def.consoleUrl } : {}),
         ...(def.trafficObservation ? { observedSince: value?.observedSince ?? null, complete: false } : {}),
+        ...(def.service ? { httpStatus: value?.httpStatus ?? null, durationMs: value?.durationMs ?? null, certificateValid: value?.certificateValid ?? null } : {}),
         // Peak storage is a capacity warning, not GB-month consumed or a charged invoice.
         accounting: def.accounting ?? (def.id === 'aliyun.yesterday_bill' ? 'reported_bill_not_cash_debited'
           : def.id.startsWith('cf.') ? 'analytics_not_invoice' : 'observed'),

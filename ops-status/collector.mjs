@@ -14,6 +14,9 @@ import { collectAliyunServers, emptyAliyunServers } from './aliyun-servers.mjs';
 import defaults from './config.json' with { type: 'json' };
 import { calibrateBusiness } from './calibrate-business.mjs';
 import { vpsMetricValues } from '../ops-board/vps-metrics.mjs';
+import { collectServiceHealth } from './service-health.mjs';
+import { appendHistory } from './history.mjs';
+import { issueCode } from './reasons.mjs';
 
 export const DAILY_READ_BUDGET = 100_000;
 export function emptyState() { return { version: 1, cache: {}, attempts: {}, fingerprints: {}, failures: {}, budget: null }; }
@@ -26,6 +29,7 @@ export async function collect({ keys, problems = {}, fetchImpl, now, state = emp
   if (state.budget.day > day) throw new Error('clock_rollback');
   const report = { issues: { ...state.failures }, missing: [], mode };
   for (const source of SOURCES) {
+    if (source === 'serviceHealth') continue;
     if (!keys[source]) {
       if (problems[source] && problems[source] !== 'key_missing') {
         for (const def of CATALOG.filter(item => item.source === source)) report.issues[def.id] = 'key_invalid';
@@ -49,7 +53,7 @@ export async function collect({ keys, problems = {}, fetchImpl, now, state = emp
   }
 
   const run = async (source, task, ids, interval, fn, business = false) => {
-    if (!keys[source]) return;
+    if (source !== 'serviceHealth' && !keys[source]) return;
     if (business && task !== 'businessD1.size' && calibration && state.calibration?.fingerprint !== state.fingerprints.businessD1) {
       for (const id of ids) report.issues[id] = 'read_budget';
       return;
@@ -89,9 +93,9 @@ export async function collect({ keys, problems = {}, fetchImpl, now, state = emp
         if (ids.includes(id)) state.cache[id] = value;
       }
       Object.assign(report.issues, result.issues);
-    } catch {
+    } catch (error) {
       // No provider errors, request URLs, raw response bodies or credentials leave this scope.
-      for (const id of ids) report.issues[id] = business && state.budget.spent > DAILY_READ_BUDGET ? 'read_budget' : 'collection_failed';
+      for (const id of ids) report.issues[id] = business && state.budget.spent > DAILY_READ_BUDGET ? 'read_budget' : issueCode(error);
     }
     for (const id of ids) {
       if (report.issues[id]) state.failures[id] = report.issues[id];
@@ -106,6 +110,7 @@ export async function collect({ keys, problems = {}, fetchImpl, now, state = emp
       return { values: {}, issues: {} };
     }, true);
   }
+  await run('serviceHealth', 'serviceHealth.probe', ids('serviceHealth'), 0, () => collectServiceHealth(now, probes.https));
   await run('cloudflare', 'cloudflare.usage', ids('cloudflare'), 15 * 60_000,
     () => collectCloudflare(keys.cloudflare, fetchImpl, now));
   await run('businessD1', 'businessD1.activity', ['business.recent_hour', 'business.today'], 6 * HOUR,
@@ -113,7 +118,7 @@ export async function collect({ keys, problems = {}, fetchImpl, now, state = emp
   await run('businessD1', 'businessD1.members', ids('businessD1').filter(id => id.startsWith('business.members.')), DAY,
     accountRows => collectBusiness(keys.businessD1, fetchImpl, now, 'members', accountRows), true);
   await run('aliyunBilling', 'aliyunBilling.balance', ['aliyun.available', 'aliyun.cash'], 15 * 60_000,
-    () => collectBalance(keys.aliyunBilling, fetchImpl, now, config.minimumBalance));
+    () => collectBalance(keys.aliyunBilling, fetchImpl, now));
   await run('aliyunBilling', 'aliyunBilling.bill', ['aliyun.yesterday_bill'], DAY,
     () => collectYesterdayBill(keys.aliyunBilling, fetchImpl, now));
   await run('directMail', 'directMail.quota', ids('directMail'), 15 * 60_000,
@@ -156,5 +161,6 @@ export async function collect({ keys, problems = {}, fetchImpl, now, state = emp
     protection: 'preflight_reservation_and_stop_after_observed_overrun_not_database_hard_cap' };
   const snapshot = buildSnapshot(state.cache, report, now, budget);
   snapshot.aliyunServers = keys.swas ? state.aliyunServers ?? emptyAliyunServers(false) : emptyAliyunServers();
+  appendHistory(snapshot, state, now);
   return { snapshot, state };
 }
