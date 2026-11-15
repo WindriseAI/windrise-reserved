@@ -62,9 +62,10 @@ export async function collectCfResources(key, fetchImpl, now) {
     let count = 0;
     for (let page = 1; page <= 100; page++) {
       const body = await get(`/accounts/${key.accountId}/cfd_tunnel?is_deleted=false&page=${page}&per_page=100`);
-      if (!Array.isArray(body.result) || !Number.isSafeInteger(body.result_info?.total_count) || !Number.isSafeInteger(body.result_info?.total_pages)) throw new Error('dataset_unavailable');
+      if (!Array.isArray(body.result)) throw new Error('dataset_unavailable');
       count += body.result.length;
-      if (page >= body.result_info.total_pages) { if (count !== body.result_info.total_count) throw new Error('dataset_unavailable'); values['cf.tunnels'] = freshValue(count, now); break; }
+      // Tunnel lists do not guarantee totals; a short page completes the filtered count.
+      if (body.result.length < 100) { values['cf.tunnels'] = freshValue(count, now); break; }
       if (page === 100) throw new Error('dataset_unavailable');
     }
   } catch (error) { issues['cf.tunnels'] = issueCode(error); }

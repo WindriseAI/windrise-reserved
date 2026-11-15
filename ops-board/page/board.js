@@ -639,7 +639,9 @@
       var t = tone(x.e);
       var u = unread(x.e);
       var right = x.days === null ? '<span class="state is-muted">' + esc(u ? u.label : '采集失败') + '</span>' : '<span class="num">' + esc(daysText(x.days)) + '</span>' + (u ? '<span class="state is-muted">' + esc(u.label) + '</span>' : '');
-      return '<li class="kv" id="' + anchorOf(x.e.id) + '" data-t="' + t + '"><span class="kv-name">' + (t === 'alert' || t === 'watch' ? dot(t) : '') + esc(x.name) + '</span><span class="kv-value">' + right + '</span></li>';
+      // 状态点放在右边天数前面：名字一列左边齐（原来点在名字前，出事的行名字靠右 16px），天数一列右边也不动
+      if (t === 'alert' || t === 'watch') right = dot(t) + right;
+      return '<li class="kv" id="' + anchorOf(x.e.id) + '" data-t="' + t + '"><span class="kv-name">' + esc(x.name) + '</span><span class="kv-value">' + right + '</span></li>';
     }).join('');
     return fold('expiry', '到期', list.length, '项', '<ul class="kvs">' + rows + '</ul>', hot || openSet.expiry);
   }
