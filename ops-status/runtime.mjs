@@ -12,7 +12,7 @@ export async function runtimeDependencies(environment = process.env) {
     else keys[source] = key;
   }
   if (typeof environment.OPS_BOARD_SUBSCRIPTION_URL === 'string' && environment.OPS_BOARD_SUBSCRIPTION_URL) keys.subscription = { url: environment.OPS_BOARD_SUBSCRIPTION_URL };
-  Object.assign(keys, { serviceHealth: {}, domains: {}, certificates: {}, manual: {}, connectivity: {}, vps: {}, paymentConsole: {}, githubConsole: {} });
+  Object.assign(keys, { domains: {}, certificates: {}, manual: {}, connectivity: {}, vps: {}, paymentConsole: {}, githubConsole: {} });
   keys.cloudMonitor = keys.huawei ? { identities: [keys.huawei.accessKeyId, keys.huawei.servers] } : null;
   keys.cfResources = keys.cloudflare;
   delete environment.OPS_BOARD_QUERY_KEYS; delete environment.OPS_BOARD_SUBSCRIPTION_URL;

@@ -22,7 +22,7 @@ export async function collectSubscription(key, fetchImpl, now) {
     const values = { 'server.raksmart.traffic': freshValue(fields.upload + fields.download, now, { limit: fields.total }) };
     const issues = {};
     if (fields.expire > 0 && fields.expire * 1000 <= 8640000000000000) values['server.raksmart.subscription_expiry_days'] = expiryValue(new Date(fields.expire * 1000).toISOString(), now);
-    else issues['server.raksmart.subscription_expiry_days'] = 'subscription_expiry_missing';
+    else issues['server.raksmart.subscription_expiry_days'] = 'dataset_unavailable';
     return { values, issues };
   } catch { throw new Error('subscription_unavailable'); }
   finally { try { await response?.body?.cancel(); } catch {} }

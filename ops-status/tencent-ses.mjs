@@ -16,8 +16,6 @@ export async function collectTencentSes(key, fetchImpl, now) {
     'content-type': 'application/json; charset=utf-8', 'x-tc-action': 'GetStatisticsReport', 'x-tc-version': '2020-10-02', 'x-tc-region': key.region, 'x-tc-timestamp': String(timestamp),
     authorization: `TC3-HMAC-SHA256 Credential=${key.secretId}/${scope}, SignedHeaders=content-type;host;x-tc-action, Signature=${signature}`,
   }, body });
-  const error = result.Response?.Error?.Code;
-  if (error) throw new Error(/UnauthorizedOperation|NoPermission|AuthFailure/i.test(String(error)) ? 'permission_denied' : 'collection_failed');
-  if (!result.Response?.OverallVolume) throw new Error('dataset_unavailable');
+  if (result.Response?.Error || !result.Response?.OverallVolume) throw new Error('dataset_unavailable');
   return { values: { 'tencent_ses.month.sent': freshValue(number(result.Response.OverallVolume.AcceptedCount), now) }, issues: {} };
 }

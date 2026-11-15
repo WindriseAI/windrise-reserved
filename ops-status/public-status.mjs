@@ -69,7 +69,7 @@ export async function collectConnectivity(config, fetchImpl, now, probe = tcpPro
   const values = {}; const issues = {};
   for (const host of ['hwa', 'hwb']) {
     const target = config.connectivity?.[host]; const id = `server.${host}.reachable`;
-    if (!target || !net.isIP(target.host) || !Number.isInteger(target.port) || target.port < 1 || target.port > 65535) { issues[id] = 'probe_not_configured'; continue; }
+    if (!target || !net.isIP(target.host) || !Number.isInteger(target.port) || target.port < 1 || target.port > 65535) { issues[id] = 'dataset_unavailable'; continue; }
     values[id] = freshValue(await probe(target.host, target.port), now);
   }
   try {

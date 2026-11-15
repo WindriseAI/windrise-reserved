@@ -1,26 +1,28 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { aliyunKey } from './credentials.mjs';
-import { requestJson, signedRpcV3 } from './http.mjs';
+import { signedRpcV3 } from './http.mjs';
 import { buildMetric, freshValue, number, DAY } from './model.mjs';
 import { expiryValue, tcpProbe } from './public-status.mjs';
-import { classifyReason, issueCode, providerIssue } from './reasons.mjs';
 
 const REGION = /^[a-z][a-z0-9-]{2,39}$/;
 const INSTANCE = /^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/;
 const TYPES = { swas: { product: 'swas', version: '2020-06-01', regions: 'ListRegions', list: 'ListInstances' }, ecs: { product: 'ecs', version: '2014-05-26', regions: 'DescribeRegions', list: 'DescribeInstances' } };
-const reason = issueCode;
+const reason = error => ['permission_denied', 'dataset_unavailable'].includes(error?.message) ? error.message : 'collection_failed';
 export function emptyAliyunServers(missing = true) {
-  const detail = missing ? 'key_missing' : 'collection_failed';
-  return { collectedAt: null, status: missing ? '未接' : '失败', reason: classifyReason(detail), reasonDetail: detail, complete: false, counts: { swas: null, ecs: null }, failures: [], instances: [] };
+  return { collectedAt: null, status: missing ? '未接' : '失败', reason: missing ? 'key_missing' : 'collection_failed', complete: false, counts: { swas: null, ecs: null }, failures: [], instances: [] };
 }
 async function api(type, regionId, action, key, params, fetchImpl, now) {
   if (!REGION.test(regionId)) throw new Error('dataset_unavailable');
   const spec = TYPES[type];
   const request = signedRpcV3(`${spec.product}.${regionId}.aliyuncs.com`, action, spec.version, key, params, now);
   try {
-    const body = await requestJson(fetchImpl, request.url, request.options);
-    if (body.Success === false || body.Code !== undefined && !['Success', 'OK', '200'].includes(String(body.Code))) throw new Error(providerIssue(body.Code));
+    const response = await fetchImpl(request.url, { ...request.options, redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if ([401, 403].includes(response.status)) { await response.body?.cancel(); throw new Error('permission_denied'); }
+    if (!response.ok) { await response.body?.cancel(); throw new Error('collection_failed'); }
+    const body = await response.json();
+    if (!body || typeof body !== 'object') throw new Error('dataset_unavailable');
+    if (body.Success === false || body.Code !== undefined && !['Success', 'OK', '200'].includes(String(body.Code))) throw new Error(/forbidden|denied|unauthoriz|permission/i.test(String(body.Code)) ? 'permission_denied' : 'collection_failed');
     return body;
   } catch (error) { throw new Error(reason(error)); }
 }
@@ -98,15 +100,13 @@ export async function collectAliyunServers(key, fetchImpl, now, previous = null,
           const latest = rows.reduce((a, b) => number(a.timestamp) > number(b.timestamp) ? a : b);
           const used = number(latest.Average); const at = number(latest.timestamp);
           // SWAS can return several unlabelled disk series; do not select one arbitrarily.
-          if (rows.some(point => number(point.timestamp) === at && number(point.Average) !== used)) throw new Error('dimension_conflict');
-          if (at > now || now - at > 900000 || name === 'cpu' && used > 100 || used > Number.MAX_SAFE_INTEGER) throw new Error('dataset_unavailable');
+          if (at > now || now - at > 900000 || name === 'cpu' && used > 100 || used > Number.MAX_SAFE_INTEGER || rows.some(point => number(point.timestamp) === at && number(point.Average) !== used)) throw new Error('dataset_unavailable');
           set(name, freshValue(used, at));
         } catch (error) { fail([name], 'DescribeMonitorData', error); }
       }
       try {
         const body = await api(type, regionId, 'ListInstancesTrafficPackages', key, { RegionId: regionId, InstanceIds: JSON.stringify([rawId]) }, fetchImpl, now);
         const rows = body.InstanceTrafficPackageUsages;
-        if (Array.isArray(rows) && rows.length === 0) throw new Error('traffic_package_empty');
         if (!Array.isArray(rows) || rows.length !== 1 || rows[0].InstanceId !== rawId) throw new Error('dataset_unavailable');
         const used = number(rows[0].TrafficUsed); const limit = number(rows[0].TrafficPackageTotal);
         if (!Number.isSafeInteger(used) || !Number.isSafeInteger(limit)) throw new Error('dataset_unavailable');
@@ -126,11 +126,13 @@ export async function collectAliyunServers(key, fetchImpl, now, previous = null,
       for (const [name, metric] of [['memory', 'memory_usedutilization'], ['disk', 'diskusage_utilization']]) {
         try {
           const request = signedRpcV3(`metrics.${regionId}.aliyuncs.com`, 'DescribeMetricLast', '2019-01-01', key, { Namespace: 'acs_ecs_dashboard', MetricName: metric, Dimensions: JSON.stringify([{ instanceId: rawId }]), StartTime: String(now - 900000), EndTime: String(now), Period: 60, Length: 1440 }, now);
-          const data = await requestJson(fetchImpl, request.url, request.options);
-          if (data.Success !== true || !['200', 'Success'].includes(String(data.Code))) throw new Error(providerIssue(data.Code));
+          const body = await fetchImpl(request.url, { ...request.options, redirect: 'error', signal: AbortSignal.timeout(15000) });
+          if ([401, 403].includes(body.status)) { await body.body?.cancel(); throw new Error('permission_denied'); }
+          if (!body.ok) { await body.body?.cancel(); throw new Error('collection_failed'); }
+          const data = await body.json();
+          if (data.Success !== true || !['200', 'Success'].includes(String(data.Code))) throw new Error(/forbidden|denied|unauthoriz|permission/i.test(String(data.Code)) ? 'permission_denied' : 'dataset_unavailable');
           const rows = JSON.parse(data.Datapoints);
-          if (Array.isArray(rows) && rows.length === 0) throw new Error('agent_no_data');
-          if (!Array.isArray(rows) || data.NextToken || rows.some(point => point.instanceId !== rawId)) throw new Error('dataset_unavailable');
+          if (!Array.isArray(rows) || !rows.length || data.NextToken || rows.some(point => point.instanceId !== rawId)) throw new Error('dataset_unavailable');
           const devices = new Map();
           for (const point of rows) {
             const at = number(point.timestamp); const used = number(point.Average);
@@ -155,7 +157,5 @@ export async function collectAliyunServers(key, fetchImpl, now, previous = null,
   }
   instances.sort((a, b) => (a.alias === 'aleg' ? -1 : b.alias === 'aleg' ? 1 : `${a.type}:${a.regionId}:${a.id}`.localeCompare(`${b.type}:${b.regionId}:${b.id}`)));
   const uniqueFailures = [...new Map(failures.map(item => [JSON.stringify(item), item])).values()];
-  const classified = uniqueFailures.map(item => ({ ...item, reason: classifyReason(item.reason), reasonDetail: item.reason }));
-  const summary = classified.some(item => item.reason === 'collect_failed') ? 'collect_failed' : classified.some(item => item.reason === 'not_authorized') ? 'not_authorized' : classified.length ? 'not_provided' : null;
-  return { inventory, snapshot: { collectedAt: new Date(now).toISOString(), status: classified.length ? '失败' : '正常', reason: summary, reasonDetail: classified.find(item => item.reason === summary)?.reasonDetail ?? null, complete: inventory.complete, counts: inventory.counts, failures: classified, instances } };
+  return { inventory, snapshot: { collectedAt: new Date(now).toISOString(), status: uniqueFailures.length ? '失败' : '正常', reason: uniqueFailures.length ? 'collection_failed' : null, complete: inventory.complete, counts: inventory.counts, failures: uniqueFailures, instances } };
 }

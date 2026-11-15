@@ -2,11 +2,12 @@ import { aliyunKey } from './credentials.mjs';
 import { rpc } from './http.mjs';
 import { freshValue, number, DAY } from './model.mjs';
 
-export async function collectBalance(key, fetchImpl, now) {
+export async function collectBalance(key, fetchImpl, now, minimumBalance = 20) {
   aliyunKey(key);
   const body = await rpc(fetchImpl, 'business.aliyuncs.com', 'QueryAccountBalance', '2017-12-14', key, {}, now);
   if (body.Success !== true || !body.Data || !['CNY', 'USD', 'JPY'].includes(body.Data.Currency)) throw new Error('empty_response');
   const extra = { unit: body.Data.Currency };
+  extra.lowWarning = number(minimumBalance);
   return { values: {
     'aliyun.available': freshValue(number(body.Data.AvailableAmount, { signed: true }), now, extra),
     'aliyun.cash': freshValue(number(body.Data.AvailableCashAmount, { signed: true }), now, { unit: body.Data.Currency }),

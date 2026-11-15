@@ -1,13 +1,11 @@
 import { isIP } from 'node:net';
 import { CATALOG } from '../ops-status/model.mjs';
 import { instanceMetricDefinitions } from '../ops-status/aliyun-servers.mjs';
-import { REASON_DETAILS, classifyReason, isFinancial, isR2UnclassifiedDetail } from '../ops-status/reasons.mjs';
-import { historyEligible } from '../ops-status/history.mjs';
 export const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
-const TOP = ['schemaVersion', 'generatedAt', 'mode', 'limitsBasis', 'metrics', 'businessReadBudget', 'aliyunServers', 'history'];
-const FIELDS = ['id', 'source', 'label', 'used', 'limit', 'unit', 'collectedAt', 'status', 'reason', 'reasonDetail', 'alertEligible', 'period', 'periodDate', 'refreshSeconds', 'staleAfterSeconds', 'accounting'];
+const TOP = ['schemaVersion', 'generatedAt', 'mode', 'limitsBasis', 'metrics', 'businessReadBudget', 'aliyunServers'];
+const FIELDS = ['id', 'source', 'label', 'used', 'limit', 'unit', 'collectedAt', 'status', 'reason', 'period', 'periodDate', 'refreshSeconds', 'staleAfterSeconds', 'accounting'];
 const STATUSES = new Set(['正常', '关注', '警告', '未接', '失败', '未更新', '不适用']);
-const REASONS = new Set([null, 'not_provided', 'not_authorized', 'collect_failed']);
+const REASONS = new Set([null, 'key_missing', 'key_invalid', 'collection_failed', 'permission_denied', 'dataset_unavailable', 'empty_dataset', 'read_budget', 'clock_rollback', 'stale', 'manual_missing', 'console_only', 'unsupported_billing_mode', 'report_missing', 'not_applicable']);
 function invalid() { throw new Error('snapshot_invalid'); }
 function exactKeys(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) invalid();
@@ -17,13 +15,11 @@ function date(value) { return typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.t
 function numeric(value) { return value === null || typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER; }
 function validateMetric(metric, def) {
   const expiry = def.expiry === true;
-  const fields = [...FIELDS, ...(expiry ? ['expiresAt', 'thresholds'] : def.id === 'cf.d1.write' ? ['thresholds'] : []), ...(def.manual ? ['asOf'] : []), ...(def.consoleUrl ? ['consoleUrl'] : []), ...(def.trafficObservation ? ['observedSince', 'complete'] : []), ...(def.service ? ['httpStatus', 'durationMs', 'certificateValid'] : [])];
+  const fields = [...FIELDS, ...(expiry ? ['expiresAt', 'thresholds'] : def.id === 'cf.d1.write' ? ['thresholds'] : []), ...(def.manual ? ['asOf'] : []), ...(def.consoleUrl ? ['consoleUrl'] : []), ...(def.trafficObservation ? ['observedSince', 'complete'] : [])];
   exactKeys(metric, fields);
   const accounting = def.accounting ?? (def.id === 'aliyun.yesterday_bill' ? 'reported_bill_not_cash_debited' : def.id.startsWith('cf.') ? 'analytics_not_invoice' : 'observed');
   const currency = def.source === 'aliyunBilling';
   if (metric.id !== def.id || metric.source !== def.source || metric.label !== def.label || metric.period !== def.period || metric.accounting !== accounting || metric.refreshSeconds !== def.refreshMs / 1000 || metric.staleAfterSeconds !== def.refreshMs / 500 || !STATUSES.has(metric.status) || !REASONS.has(metric.reason) || !(metric.collectedAt === null || iso(metric.collectedAt)) || !(metric.periodDate === null || def.id === 'aliyun.yesterday_bill' && date(metric.periodDate)) || (currency ? !['CNY', 'USD', 'JPY'].includes(metric.unit) : metric.unit !== def.unit) || !numeric(metric.used) || !numeric(metric.limit) || metric.limit !== null && metric.limit < 0) invalid();
-  if (!(metric.reasonDetail === null || REASON_DETAILS.has(metric.reasonDetail) || ['cf.r2.a', 'cf.r2.b'].includes(def.id) && isR2UnclassifiedDetail(metric.reasonDetail)) || metric.reason !== classifyReason(metric.reasonDetail) || metric.alertEligible !== (!isFinancial(def) && metric.status !== '不适用') || isFinancial(def) && ['关注', '警告'].includes(metric.status)) invalid();
-  if (def.service && (!(metric.httpStatus === null || Number.isInteger(metric.httpStatus) && metric.httpStatus >= 100 && metric.httpStatus <= 599) || !(metric.durationMs === null || Number.isSafeInteger(metric.durationMs) && metric.durationMs >= 0) || ![null, true, false].includes(metric.certificateValid))) invalid();
   if (!currency && !def.decimal && metric.id !== 'cf.cpu_p99_max' && metric.used !== null && (!Number.isSafeInteger(metric.used) || !expiry && metric.used < 0)) invalid();
   if (expiry && (!(metric.expiresAt === null || iso(metric.expiresAt) || date(metric.expiresAt)) || metric.used !== null && metric.expiresAt === null || metric.limit !== null)) invalid();
   if (expiry || def.id === 'cf.d1.write') {
@@ -37,13 +33,12 @@ function validateMetric(metric, def) {
   if (metric.used !== null && metric.collectedAt === null) invalid();
 }
 function validateAliyunServers(data) {
-  exactKeys(data, ['collectedAt', 'status', 'reason', 'reasonDetail', 'complete', 'counts', 'failures', 'instances']);
+  exactKeys(data, ['collectedAt', 'status', 'reason', 'complete', 'counts', 'failures', 'instances']);
   exactKeys(data.counts, ['swas', 'ecs']);
   if (!(data.collectedAt === null || iso(data.collectedAt)) || !STATUSES.has(data.status) || !REASONS.has(data.reason) || typeof data.complete !== 'boolean' || !Array.isArray(data.failures) || data.failures.length > 2000 || !Array.isArray(data.instances) || data.instances.length > 10000) invalid();
-  if (!(data.reasonDetail === null || REASON_DETAILS.has(data.reasonDetail)) || data.reason !== classifyReason(data.reasonDetail)) invalid();
   for (const item of data.failures) {
-    exactKeys(item, ['type', 'regionId', 'action', 'reason', 'reasonDetail']);
-    if (!['swas', 'ecs'].includes(item.type) || !(item.regionId === null || typeof item.regionId === 'string' && /^[a-z][a-z0-9-]{2,39}$/.test(item.regionId)) || !['ListRegions', 'DescribeRegions', 'ListInstances', 'DescribeInstances', 'DescribeMonitorData', 'ListInstancesTrafficPackages', 'DescribeInstanceMonitorData', 'DescribeMetricLast'].includes(item.action) || !REASONS.has(item.reason) || item.reason === null || !REASON_DETAILS.has(item.reasonDetail) || item.reason !== classifyReason(item.reasonDetail)) invalid();
+    exactKeys(item, ['type', 'regionId', 'action', 'reason']);
+    if (!['swas', 'ecs'].includes(item.type) || !(item.regionId === null || typeof item.regionId === 'string' && /^[a-z][a-z0-9-]{2,39}$/.test(item.regionId)) || !['ListRegions', 'DescribeRegions', 'ListInstances', 'DescribeInstances', 'DescribeMonitorData', 'ListInstancesTrafficPackages', 'DescribeInstanceMonitorData', 'DescribeMetricLast'].includes(item.action) || !['collection_failed', 'dataset_unavailable', 'permission_denied'].includes(item.reason)) invalid();
   }
   const seen = new Set(); let aliases = 0;
   for (const row of data.instances) {
@@ -71,18 +66,6 @@ export function validateSnapshot(snapshot) {
     validateMetric(metric, def); remaining.delete(metric.id);
   }
   validateAliyunServers(snapshot.aliyunServers);
-  const tracked = [...snapshot.metrics, ...snapshot.aliyunServers.instances.flatMap(row => row.metrics)].filter(historyEligible);
-  exactKeys(snapshot.history, tracked.map(metric => metric.id));
-  for (const metric of tracked) {
-    const points = snapshot.history[metric.id];
-    if (!Array.isArray(points) || points.length > 48) invalid();
-    let last = '';
-    for (const point of points) {
-      exactKeys(point, ['t', 'v', 'status']);
-      if (!iso(point.t) || point.t <= last || !numeric(point.v) || !STATUSES.has(point.status) || ['未接', '失败', '未更新', '不适用'].includes(point.status) && point.v !== null) invalid();
-      last = point.t;
-    }
-  }
   const budget = snapshot.businessReadBudget;
   exactKeys(budget, ['day', 'used', 'limit', 'accounting', 'protection']);
   if (!date(budget.day) || !Number.isSafeInteger(budget.used) || budget.used < 0 || budget.limit !== 100000 || budget.accounting !== 'actual_rows_read_when_available_otherwise_reserved_estimate' || budget.protection !== 'preflight_reservation_and_stop_after_observed_overrun_not_database_hard_cap') invalid();

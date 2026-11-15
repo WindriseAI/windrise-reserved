@@ -14,23 +14,8 @@ export const QUERY = `query OpsUsage($account: string!, $day: Date!, $month: Dat
  } }
 }`;
 
-// Pricing enumerates all 15 Class A, 8 Class B and 3 free operations:
-// https://developers.cloudflare.com/r2/pricing/#class-a-operations
-const classA = new Set([
-  'ListBuckets', 'PutBucket', 'ListObjects', 'PutObject', 'CopyObject',
-  'CompleteMultipartUpload', 'CreateMultipartUpload', 'LifecycleStorageTierTransition',
-  'ListMultipartUploads', 'UploadPart', 'UploadPartCopy', 'ListParts',
-  'PutBucketEncryption', 'PutBucketCors', 'PutBucketLifecycleConfiguration',
-]);
-const classB = new Set([
-  'HeadBucket', 'HeadObject', 'GetObject', 'UsageSummary', 'GetBucketEncryption',
-  'GetBucketLocation', 'GetBucketCors', 'GetBucketLifecycleConfiguration',
-  // [INFERENCE] Configuration reads follow Class B's read-existing-state basis;
-  // pricing does not enumerate these two names. Official GET semantics:
-  // https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/event_notifications/methods/list/
-  // https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/sippy/methods/get/
-  'GetBucketNotificationConfiguration', 'GetBucketSippyConfiguration',
-]);
+const classA = new Set(['ListBuckets', 'PutBucket', 'ListObjects', 'PutObject', 'CopyObject', 'CompleteMultipartUpload', 'CreateMultipartUpload', 'LifecycleStorageTierTransition', 'ListMultipartUploads', 'UploadPart', 'UploadPartCopy', 'ListParts', 'PutBucketEncryption', 'PutBucketCors', 'PutBucketLifecycleConfiguration']);
+const classB = new Set(['HeadBucket', 'HeadObject', 'GetObject', 'UsageSummary', 'GetBucketEncryption', 'GetBucketLocation', 'GetBucketCors', 'GetBucketLifecycleConfiguration']);
 const free = new Set(['DeleteObject', 'DeleteBucket', 'AbortMultipartUpload']);
 
 function groups(account, name) {
@@ -54,7 +39,7 @@ export async function collectCloudflare(key, fetchImpl, now) {
   const account = body.data?.viewer?.accounts?.[0];
   if (!account) throw new Error('empty_response');
   const values = {};
-  const put = (id, value, extra) => { values[id] = freshValue(value, now, extra); };
+  const put = (id, value) => { values[id] = freshValue(value, now); };
   const issues = {};
   // A dataset unavailable on this plan must not erase unrelated successful datasets.
   const section = (ids, fn) => { try { fn(); } catch { for (const id of ids) issues[id] = 'dataset_unavailable'; } };
@@ -84,20 +69,16 @@ export async function collectCloudflare(key, fetchImpl, now) {
   section(['cf.kv.storage'], () => put('cf.kv.storage', sum(groups(account, 'kvStorageAdaptiveGroups'), 'byteCount', 'max')));
   section(['cf.r2.a', 'cf.r2.b'], () => {
     const totals = { a: 0, b: 0 }; const seen = new Set();
-    let unclassifiedRequests = null;
     for (const row of groups(account, 'r2OperationsAdaptiveGroups')) {
       const type = row.dimensions?.actionType;
       const count = number(row.sum?.requests);
-      if (!Number.isSafeInteger(count)) throw new Error('invalid_number');
       if (classA.has(type)) { totals.a += count; seen.add('a'); }
       else if (classB.has(type)) { totals.b += count; seen.add('b'); }
-      else if (!free.has(type)) unclassifiedRequests = (unclassifiedRequests ?? 0) + count;
+      else if (!free.has(type)) throw new Error('unknown_operation');
     }
-    if (unclassifiedRequests !== null && !Number.isSafeInteger(unclassifiedRequests)) throw new Error('invalid_number');
-    const reasonDetail = unclassifiedRequests === null ? null : `r2_unclassified_operations:${unclassifiedRequests}`;
     for (const type of ['a', 'b']) {
-      if (seen.has(type)) put(`cf.r2.${type}`, totals[type], { reasonDetail });
-      else issues[`cf.r2.${type}`] = reasonDetail ?? 'empty_dataset';
+      if (seen.has(type)) put(`cf.r2.${type}`, totals[type]);
+      else issues[`cf.r2.${type}`] = 'empty_dataset';
     }
   });
   section(['cf.r2.storage'], () => {
