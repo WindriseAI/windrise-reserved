@@ -2,6 +2,7 @@ import { collect, emptyState } from '../ops-status/collector.mjs';
 import { validateSnapshot } from './snapshot.mjs';
 import { CATALOG, buildMetric } from '../ops-status/model.mjs';
 import { vpsMetricValues } from './vps-metrics.mjs';
+import { appendHistory } from '../ops-status/history.mjs';
 
 export function createResidentCollector({ dependencies, now = Date.now, interval = 900000, collectImpl = collect, setTimer = setInterval, clearTimer = clearInterval, log = console.log }) {
   let state = emptyState(); let record = null; let running = null; let timer = null; let stopped = false;
@@ -22,9 +23,10 @@ export function createResidentCollector({ dependencies, now = Date.now, interval
     if (running) return running;
     running = (async () => {
       try {
-        const result = await collectImpl({ ...dependencies, probes: { ...dependencies.probes, vpsReport: () => latestVps }, now: now(), state, mode: 'local' });
-        const snapshot = validateSnapshot(updateVps(result.snapshot));
+        const startedAt = now();
+        const result = await collectImpl({ ...dependencies, probes: { ...dependencies.probes, vpsReport: () => latestVps }, now: startedAt, state, mode: 'local' });
         state = result.state;
+        const snapshot = validateSnapshot(appendHistory(updateVps(result.snapshot), state, startedAt, 'vps'));
         record = { snapshot, collectedAt: new Date(now()).toISOString() };
         log('collection_complete');
       } catch { log('collection_failed'); }
@@ -41,7 +43,7 @@ export function createResidentCollector({ dependencies, now = Date.now, interval
     getRecord: () => record,
     acceptVpsReport(report) {
       latestVps = report;
-      if (record) record = { snapshot: validateSnapshot(updateVps({ ...record.snapshot })), collectedAt: new Date(now()).toISOString() };
+      if (record) record = { snapshot: validateSnapshot(appendHistory(updateVps({ ...record.snapshot }), state, now(), 'vps')), collectedAt: new Date(now()).toISOString() };
     },
     async stop() { stopped = true; if (timer !== null) clearTimer(timer); await running; },
   };

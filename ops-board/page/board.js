@@ -2,6 +2,10 @@
  * 运营状态页：只读同源 ./snapshot.json，按页面合同（给用户-运营状态单/快照字段.md）显示。
  * 不请求任何供应商接口，不带钥匙。空值不画成 0；估算和平台统计不标成已扣费。
  * 每次渲染都用当前时间重查每项 collectedAt，超过 staleAfterSeconds 就显示「未更新」。
+ *
+ * 版式按紧急程度从上往下（11-16 改版）：结论横幅 → 实时状态（服务、服务器在不在线，带最近 N 次检查竖条）
+ * → 服务器资源（数字 + 细横条 + 小折线）→ 额度和用量 → 钱 → 折叠的到期、报到人数、后台链接。
+ * 钱（余额、账单、费用）只用中性色，不计入横幅（用户 11-16：「看板费用别给我算异常，我自己看就行了」）。
  */
 (function () {
   'use strict';
@@ -9,154 +13,122 @@
   var REFETCH_MS = 60000;
   var RETICK_MS = 30000;
   var STATUSES = ['正常', '关注', '警告', '未接', '失败', '未更新', '不适用'];
-  // 一眼要先看到的排前面
-  var SEVERITY = { '警告': 6, '失败': 5, '未更新': 4, '关注': 3, '未知': 2, '未接': 1, '正常': 0, '不适用': -1 };
-  var COUNT_ORDER = ['警告', '关注', '未更新', '失败', '未接', '正常'];
+  var SNAPSHOT_STALE_MS = 30 * 60000;
+  var STRIP_SLOTS = 48;
+  // 额度用量低于这个百分比、状态正常的行，组内合成一行「其余 N 项正常」，默认收起（理由见页面-报告「发布前最后一轮」）
+  var NEAR_ZERO_PCT = 10;
+  // 横幅最多点几个名字，多出来的写「另 N 项」
+  var BANNER_NAMES = 3;
+
+  // ---------- 名字 ----------
 
   var NAMES = {
-    'cf.requests': 'Worker 动态请求',
-    'cf.errors': 'Worker 执行错误',
-    'cf.cpu_p99_max': '各脚本 CPU P99 中的最大值',
+    'cf.requests': 'Workers 请求',
+    'cf.errors': 'Workers 执行错误',
+    'cf.cpu_p99_max': 'Workers CPU P99',
     'cf.d1.read': 'D1 读行',
     'cf.d1.write': 'D1 写行',
-    'cf.d1.storage': 'D1 各库当日峰值容量合计',
-    'cf.d1.largest': 'D1 最大单库当日峰值',
+    'cf.d1.storage': 'D1 容量',
+    'cf.d1.largest': 'D1 最大单库',
     'cf.kv.read': 'KV 读取',
     'cf.kv.write': 'KV 写入',
     'cf.kv.delete': 'KV 删除',
     'cf.kv.list': 'KV 列举',
-    'cf.kv.storage': 'KV 各空间当日峰值容量合计',
+    'cf.kv.storage': 'KV 容量',
     'cf.r2.a': 'R2 A 类操作',
     'cf.r2.b': 'R2 B 类操作',
-    'cf.r2.storage': 'R2 各桶当日峰值容量合计',
-    'business.recent_hour': '最近 1 小时有报到记录的电脑',
-    'business.today': '今日有报到记录的电脑',
+    'cf.r2.storage': 'R2 容量',
+    'cf.tunnels': '命名隧道',
+    'mail.daily_free': 'DirectMail 今日赠额',
+    'mail.total_free': 'DirectMail 累计赠额',
+    'tencent_ses.month.sent': '腾讯 SES 本月',
+    'tencent_ses.gift_remaining': '腾讯 SES 剩余赠额',
+    'sms.package_remaining': '短信资源包剩余',
+    'server.cloady.traffic': 'Cloady 流量',
+    'server.cloady.requests': 'Cloady 请求',
+    'server.cloady.cpu_hours': 'Cloady CPU 时长',
+    'server.cloady.memory_gb_hours': 'Cloady 内存用量',
+    'server.raksmart.traffic': '订阅流量',
+    'aliyun.available': '阿里云可用额度',
+    'aliyun.cash': '阿里云现金余额',
+    'aliyun.yesterday_bill': '阿里云昨日账单',
+    'huawei.cash': '华为云现金余额',
+    'huawei.coupons': '华为云代金券',
+    'sms.month.estimated_cost': '短信本月估算',
+    'business.recent_hour': '最近 1 小时',
+    'business.today': '今天',
     'business.members.free': '免费账号',
     'business.members.monthly': '月卡',
     'business.members.quarterly': '季卡',
     'business.members.yearly': '年卡',
     'business.members.trial': '试用',
     'business.members.manual': '手动发放',
-    'business.members.other': '其他有效权益',
-    'aliyun.available': '可用额度',
-    'aliyun.cash': '现金余额',
-    'aliyun.yesterday_bill': '昨日账单应付',
-    'mail.total_free': 'DirectMail 累计免费赠额',
-    'mail.daily_free': 'DirectMail 当日免费赠额',
-    'server.expiry_days': '阿里云轻量服务器到期',
-    'cf.tunnels': '命名隧道',
-    'huawei.cash': '现金余额',
-    'huawei.coupons': '有效代金券',
-    'sms.month.estimated_cost': '本月估算费用',
-    'sms.package_remaining': '有效资源包余量',
-    'tencent_ses.month.sent': '本月通过数量',
-    'tencent_ses.gift_remaining': '剩余赠额',
-    'aliyunServers': '阿里云服务器'
+    'business.members.other': '其他权益',
+    'server.expiry_days': 'aleg 到期',
+    'server.raksmart.expiry_days': 'RakSmart 账单到期',
+    'server.raksmart.subscription_expiry_days': '订阅到期'
   };
 
-  // 服务器分主机显示：行内用短名，「需要留意」里用主机名 + 短名
-  var HOSTS = [
-    // 第二版：订阅套餐流量和订阅到期是独立两项；本机流量另算，三者不相加
-    ['raksmart', 'RakSmart VPS', ['reachable', 'cpu', 'memory', 'disk', 'uptime', 'host_traffic', 'traffic', 'subscription_expiry_days', 'expiry_days', 'monthly_price']],
-    ['aleg', '阿里云轻量服务器', ['reachable', 'cpu', 'memory', 'disk', 'traffic', '@server.expiry_days']],
-    ['hwa', '华为云 hwa', ['reachable', 'cpu', 'memory', 'disk', 'hourly_price', 'billing_mode']],
-    ['hwb', '华为云 hwb', ['reachable', 'cpu', 'memory', 'disk', 'hourly_price', 'billing_mode']],
-    ['cloady', 'Cloady 应用', ['reachable', 'traffic', 'requests', 'cpu_hours', 'memory_gb_hours']]
-  ];
-  var HOST_SHORT = {
-    reachable: '连通', cpu: 'CPU', memory: '内存已用', disk: '磁盘已用', uptime: '运行时间', traffic: '本月流量',
-    expiry_days: '到期', monthly_price: '月费', hourly_price: '计算实例每小时询价', billing_mode: '计费模式',
-    requests: '本月请求', cpu_hours: '本月 CPU 时长', memory_gb_hours: '本月内存用量',
-    host_traffic: '本机本月流量', subscription_expiry_days: '订阅到期'
-  };
+  // 服务在线检查：指标 id 由后端写进《快照字段.md》；这里按 service.<键>.reachable 读，没有的项显示「未接」。
+  // 「看板」在没有专门检查时用 Cloady HTTPS 连通（看板就跑在 Cloady 上）。
+  var SERVICES = [['website_cn', '官网中文'], ['website_en', '官网英文'], ['gateway', '网关'], ['mcp', 'MCP'],
+    ['activation', '激活接口'], ['ops_board', '看板', 'server.cloady.reachable']];
 
-  // 阿里云实例（第二版 aliyunServers，台数不固定）：类型、地域、运行状态、计费方式的人话
-  var ALI_TYPES = { swas: '阿里云轻量服务器', ecs: '阿里云 ECS' };
-  var ALI_REGIONS = {
-    'cn-qingdao': '华北 1（青岛）', 'cn-beijing': '华北 2（北京）', 'cn-zhangjiakou': '华北 3（张家口）', 'cn-huhehaote': '华北 5（呼和浩特）',
-    'cn-wulanchabu': '华北 6（乌兰察布）', 'cn-hangzhou': '华东 1（杭州）', 'cn-shanghai': '华东 2（上海）', 'cn-nanjing': '华东 5（南京）',
-    'cn-fuzhou': '华东 6（福州）', 'cn-shenzhen': '华南 1（深圳）', 'cn-heyuan': '华南 2（河源）', 'cn-guangzhou': '华南 3（广州）',
-    'cn-chengdu': '西南 1（成都）', 'cn-hongkong': '中国香港', 'ap-southeast-1': '新加坡', 'ap-northeast-1': '日本（东京）',
-    'ap-northeast-2': '韩国（首尔）', 'us-west-1': '美国（硅谷）', 'us-east-1': '美国（弗吉尼亚）', 'eu-central-1': '德国（法兰克福）'
-  };
-  var ALI_STATES = { Running: '运行中', Starting: '启动中', Stopping: '停止中', Stopped: '已停止', Pending: '准备中', Rebooting: '重启中',
-    Resetting: '重置中', Expired: '已过期', Disabled: '已停用', Unknown: '运行状态未知' };
-  var ALI_BILLING = { prepaid: '预付费', postpaid: '按量付费', unknown: '计费方式未知' };
-  var ALI_ACTIONS = { ListRegions: '地域列表', DescribeRegions: '地域列表', ListInstances: '实例列表', DescribeInstances: '实例列表',
-    DescribeMonitorData: '监控数据', DescribeInstanceMonitorData: '监控数据', DescribeMetricLast: '监控数据', ListInstancesTrafficPackages: '流量包' };
-  var ALI_ORDER = ['reachable', 'cpu', 'memory', 'disk', 'traffic', 'expiry_days'];
+  // 服务器：先阿里云实例（aleg 在前），再按这个顺序；快照里有别的 server.<主机>.reachable 也照样列出
+  var HOST_ORDER = ['aleg', 'raksmart', 'hwa', 'hwb', 'ln', 'pc1'];
+  var HOST_NAMES = { aleg: 'aleg', raksmart: 'RakSmart', hwa: 'hwa', hwb: 'hwb', ln: 'LN', pc1: '电脑一' };
+  // Cloady 是看板所在的应用，不当服务器列；它的用量在额度和用量里
+  var HOST_SKIP = { cloady: true };
+  var RESOURCES = [['cpu', 'CPU'], ['memory', '内存'], ['disk', '磁盘'], ['traffic', '流量']];
+
   var ALI_ID = /^aliyun\.([a-f0-9]{24})\.([a-z_]+)$/;
-  // 指标 id -> 所属实例，渲染时由快照填
-  var instanceOf = {};
-  // 主机控制台只放已核实的地址；其余主机没有可靠后台链接，不编
-  var HOST_CONSOLE = { aleg: ['阿里云轻量应用服务器控制台', 'https://swas.console.aliyun.com/#/servers'] };
+  var ALI_STATES = { Running: '运行中', Starting: '启动中', Stopping: '停止中', Stopped: '已停止', Pending: '准备中', Rebooting: '重启中',
+    Resetting: '重置中', Expired: '已过期', Disabled: '已停用', Unknown: '状态未知' };
+  var ALI_DOWN = { Stopped: true, Expired: true, Disabled: true };
+
   var DOMAINS = [['windrisebridge_com', 'windrisebridge.com'], ['windrisebridge_cn', 'windrisebridge.cn'], ['windrise_si', 'windrise.si'], ['secrethq_shop', 'secrethq.shop']];
-  var CERTS = [['website_cn', '中文官网 windrisebridge.cn'], ['website_cn_www', '中文官网 www'], ['website_en', '英文官网 windrisebridge.com'], ['website_en_www', '英文官网 www'],
-    ['gateway', '网关 gw.windrise.si'], ['activation', '激活 api.secrethq.shop'], ['mcp', 'MCP mcp.windrise.si'], ['cloady', 'Cloady 应用域名']];
+  var CERTS = [['website_cn', 'windrisebridge.cn'], ['website_cn_www', 'www.windrisebridge.cn'], ['website_en', 'windrisebridge.com'], ['website_en_www', 'www.windrisebridge.com'],
+    ['gateway', 'gw.windrise.si'], ['activation', 'api.secrethq.shop'], ['mcp', 'mcp.windrise.si'], ['cloady', 'Cloady'],
+    ['ops', 'ops.windrise.si']];
   var MANUALS = [['evsign', 'Windows 签名'], ['mac_signing', 'Mac 代签'], ['feishu', '飞书企业邮箱']];
-  var PAYMENTS = [['creem', 'Creem'], ['alipay', '支付宝']];
-  var PAY_FIELDS = [['count', '收款笔数'], ['amount', '收款金额'], ['fees', '手续费'], ['refunds', '退款金额'], ['disputes', '拒付笔数']];
 
-  var GROUP_NAMES = { cloudflare: 'Cloudflare', aliyun: '云账户余额', mail: '邮件与短信', server: '服务器', business: '报到人数',
-    domain: '域名与证书', pay: '付款与 GitHub', manual: '手填项' };
-
-  var EXTRA_NOTES = {
-    'cf.r2.storage': '只作容量参考，不是月账单的存储用量',
-    'cf.d1.storage': '各库峰值相加，不是同一时刻的精确合计',
-    'cf.kv.storage': '各空间峰值相加，不是同一时刻的精确合计',
-    'cf.d1.read': '包含本机报到统计的查询',
-    'aliyun.cash': '只展示，不设提醒线',
-    'mail.total_free': '累计赠额用完不会恢复'
-  };
-
-  var PERIODS = {
-    'utc-day': '按 UTC 日累计，北京时间 8 点清零',
-    'utc-month': '按 UTC 自然月累计',
-    'utc-day-peak': '当日峰值',
-    'as-of-collection': '截至采集时',
-    'asia-shanghai-day': '北京时间当天 0 点起',
-    'lifetime': '累计',
-    'provider-day': '按邮件推送服务的当日口径',
-    'provider-month': '按服务商账期累计',
-    'asia-shanghai-month': '北京时间本月',
-    'provider-cycle': '按订阅套餐周期累计'
-  };
-
-  var REASONS = {
-    key_missing: '尚未接入只读钥匙',
-    key_invalid: '本机钥匙文件格式或读取条件不符合要求',
-    collection_failed: '本次读取失败',
-    dataset_unavailable: '此数据集为空、不完整或当前账号暂不可读取',
-    empty_dataset: '平台没有返回此项记录，不能按零计算',
-    read_budget: '业务读行预算不足或已超预算，本次未更新',
-    clock_rollback: '采集电脑的时间早于已有记录，已停止查询',
-    stale: '数据已超过更新周期',
-    manual_missing: '待填，还没有手填',
-    console_only: '没有只读接口，只能在后台看',
-    unsupported_billing_mode: '不是按需计费，查不到每小时价格',
-    not_applicable: '此项不适用',
-    report_missing: '还没有收到这台 VPS 的本机上报'
-  };
-
-  // 同一个 reason 在不同指标上意思不同，按 id 换成具体的话
-  function reasonText(e) {
-    var ali = ALI_ID.exec(e.id);
-    if (ali && ali[2] === 'expiry_days' && e.reason === 'not_applicable') return '按量付费，没有到期时间';
-    if (ali && ali[2] === 'reachable' && e.reason === 'not_applicable') return '没有已知的探测端口，不探测；运行状态见上面';
-    if (e.id === 'server.raksmart.subscription_expiry_days' && e.reason === 'dataset_unavailable') return '订阅没有给出到期时间';
-    return REASONS[e.reason];
-  }
+  var USAGE_GROUPS = [
+    ['Cloudflare', ['cf.requests', 'cf.errors', 'cf.cpu_p99_max', 'cf.d1.read', 'cf.d1.write', 'cf.d1.storage', 'cf.d1.largest',
+      'cf.kv.read', 'cf.kv.write', 'cf.kv.delete', 'cf.kv.list', 'cf.kv.storage', 'cf.r2.a', 'cf.r2.b', 'cf.r2.storage', 'cf.tunnels']
+      // windrisebridge.cn 的 DNS 在 DNSPod，合同没有这一项
+      .concat(DOMAINS.filter(function (d) { return d[0] !== 'windrisebridge_cn'; }).map(function (d) { return 'cf.dns.' + d[0]; }))],
+    ['邮件', ['mail.daily_free', 'mail.total_free', 'tencent_ses.month.sent', 'tencent_ses.gift_remaining']],
+    ['短信', ['@sms.day', '@sms.month', 'sms.package_remaining']],
+    ['Cloady 和订阅', ['server.cloady.traffic', 'server.cloady.requests', 'server.cloady.cpu_hours', 'server.cloady.memory_gb_hours', 'server.raksmart.traffic']]
+  ];
+  var MONEY_IDS = ['aliyun.available', 'aliyun.cash', 'aliyun.yesterday_bill', 'huawei.cash', 'huawei.coupons', 'sms.month.estimated_cost'];
+  // 钱：余额、账单、费用、价格。不判色、不计入横幅
+  var MONEY = /^(aliyun\.(available|cash|yesterday_bill)|huawei\.(cash|coupons)|sms\.month\.estimated_cost|payments\..+)$|\.(hourly_price|monthly_price|renewal_price|annual_price)$/;
 
   var BACKEND = [
-    ['Cloudflare 账单与发票', 'https://dash.cloudflare.com/?to=/:account/billing', '最终费用以发票为准，本页只是平台统计的用量'],
-    ['阿里云费用与成本', 'https://usercenter2.aliyun.com/home', '分账、调账、优惠券和最终账单'],
-    ['Resend 用量', 'https://resend.com/settings/usage', '现有钥匙权限过大，不接入本页'],
-    ['Brevo', 'https://app.brevo.com/', '发信额度，只读查询尚未接入'],
-    ['Elastic Email', 'https://app.elasticemail.com/', '发信量，只读查询尚未接入'],
-    ['Mailjet', 'https://app.mailjet.com/', '只读钥匙能力未核实'],
-    ['Mailtrap', 'https://mailtrap.io/', '只读钥匙能力未核实'],
-    ['Maileroo', 'https://app.maileroo.com/', '只读钥匙能力未核实']
+    ['Cloudflare 账单', 'https://dash.cloudflare.com/?to=/:account/billing'],
+    ['阿里云费用', 'https://usercenter2.aliyun.com/home'],
+    ['阿里云轻量服务器', 'https://swas.console.aliyun.com/#/servers'],
+    ['Resend', 'https://resend.com/settings/usage'],
+    ['Brevo', 'https://app.brevo.com/'],
+    ['Elastic Email', 'https://app.elasticemail.com/'],
+    ['Mailjet', 'https://app.mailjet.com/'],
+    ['Mailtrap', 'https://mailtrap.io/'],
+    ['Maileroo', 'https://app.maileroo.com/']
   ];
+  var CONSOLE_NAMES = [[/^payments\.creem\./, 'Creem'], [/^payments\.alipay\./, '支付宝'], [/^github\./, 'GitHub']];
+
+  // 读不到只有三类，照后端合同（快照字段.md）的 reason：not_provided 这家不提供、not_authorized 待授权、collect_failed 采集失败。
+  // status=未接 单独显示「未接」，不归进这三类（见 unread）。
+  var REASON_KIND = { not_provided: 'none', not_authorized: 'auth', collect_failed: 'fail' };
+  // 旧夹具和改版前的快照 reason 写的是细分原因（合同里叫 reasonDetail）：按后端 reasons.mjs 的同一张表归类，认不出的算采集失败
+  var DETAIL_KIND = {
+    unsupported_billing_mode: 'none', traffic_package_empty: 'none', agent_no_data: 'none', subscription_expiry_missing: 'none',
+    provider_unsupported: 'none', not_applicable: 'none',
+    key_missing: 'auth', key_invalid: 'auth', permission_denied: 'auth', manual_missing: 'auth', probe_not_configured: 'auth',
+    rate_not_configured: 'auth', console_only: 'auth', auth_pending: 'auth', needs_authorization: 'auth'
+  };
+  var KIND_LABEL = { none: '这家不提供', auth: '待授权', fail: '采集失败', unwired: '未接', stale: '未更新' };
 
   var app = document.getElementById('app');
   var params = new URLSearchParams(location.search);
@@ -172,7 +144,7 @@
   var snapshot = null;
   var loadProblem = null;
   var rendered = false;
-  var previous = {};
+
   var reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
 
   function now() { return fixedNow !== null ? fixedNow : Date.now(); }
@@ -196,24 +168,19 @@
     return parts.month + '月' + parts.day + '日 ' + parts.hour + ':' + parts.minute;
   }
 
-  function dayLabel(ymd) {
-    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '');
-    return m ? Number(m[2]) + '月' + Number(m[3]) + '日' : '';
-  }
 
   function duration(ms) {
     var min = Math.max(0, Math.floor(ms / 60000));
     if (min < 120) return min + ' 分钟';
     var h = Math.floor(min / 60);
-    if (h < 48) return h + ' 小时 ' + (min % 60) + ' 分钟';
+    if (h < 48) return h + ' 小时';
     return Math.floor(h / 24) + ' 天 ' + (h % 24) + ' 小时';
   }
 
   function bytes(v) {
-    // 按四舍五入到一位小数后的值选单位，避免 999,995,000 字节写成「1,000 MB」
     var a = Math.abs(v);
-    // 0 不写「0 字节」：同一行的上限是 GB，单位跟着一起写 GB
     if (v === 0) return '0 GB';
+    if (a >= 999.95e9) return oneFmt.format(v / 1e12) + ' TB';
     if (a >= 999.95e6) return oneFmt.format(v / 1e9) + ' GB';
     if (a >= 999.95e3) return oneFmt.format(v / 1e6) + ' MB';
     if (a >= 999.95) return oneFmt.format(v / 1e3) + ' KB';
@@ -222,7 +189,7 @@
 
   var CURRENCY = { CNY: '¥', USD: 'US$', JPY: 'JP¥' };
 
-  // kind: 数值格式，和单位一起决定怎么写
+
   function fmt(kind, v) {
     if (kind === 'pct') {
       if (v > 0 && v < 1) return '不到 1%';
@@ -233,22 +200,27 @@
     if (CURRENCY[kind]) return (v < 0 ? '-' : '') + CURRENCY[kind] + moneyFmt.format(Math.abs(v));
     var per = /^(CNY|USD|JPY)\/(.+)$/.exec(kind || '');
     if (per) return fmt(per[1], v) + ' / ' + per[2];
-    if (kind === '%') return oneFmt.format(v) + '%';
+    if (kind === '%') return intFmt.format(Math.round(v)) + '%';
     if (kind === '秒') return duration(v * 1000);
     return (Number.isInteger(v) ? intFmt : oneFmt).format(v) + (kind ? ' ' + kind : '');
   }
 
-  function num(key, kind, v) {
-    return '<span class="num" data-k="' + esc(key) + '" data-f="' + esc(kind) + '" data-v="' + v + '">' + esc(fmt(kind, v)) + '</span>';
+  // 「已用 / 上限」：同单位只在上限后写一次
+  function usedOfLimit(unit, used, limit) {
+    if (unit === '字节') return bytes(used) + ' / ' + bytes(limit);
+    var plain = function (v) { return (Number.isInteger(v) ? intFmt : oneFmt).format(v); };
+    return plain(used) + ' / ' + fmt(unit, limit);
   }
 
-  function badge(status) {
-    return '<span class="badge" data-s="' + esc(status) + '"><span class="dot" data-s="' + esc(status) + '" aria-hidden="true"></span>' + esc(status) + '</span>';
+  function num(key, kind, v, text) {
+    return '<span class="num" data-k="' + esc(key) + '" data-f="' + esc(kind) + '" data-v="' + v + '">' + esc(text || fmt(kind, v)) + '</span>';
   }
+
+  function anchorOf(id) { return 'm-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '-'); }
 
   // ---------- 状态 ----------
 
-  // 合同第 1、2 条：未接优先；有旧值且超时或时间回退显示未更新。页面以当前时间重查，不信 JSON 里的「正常」。
+  // 未接优先；有旧值且超时或时间回退显示未更新。页面以当前时间重查，不信 JSON 里的「正常」。
   function evaluate(m, t) {
     var used = typeof m.used === 'number' && isFinite(m.used) ? m.used : null;
     var limit = typeof m.limit === 'number' && isFinite(m.limit) ? m.limit : null;
@@ -261,659 +233,572 @@
       if (age < 0) { status = '未更新'; reason = 'clock_rollback'; }
       else if (typeof m.staleAfterSeconds === 'number' && age > m.staleAfterSeconds * 1000) { status = '未更新'; reason = reason === 'read_budget' ? reason : 'stale'; }
     }
-    // 判色状态却没有数值，就是未知，不能按 0 判正常
     if (used === null && (status === '正常' || status === '关注' || status === '警告')) status = '未知';
-    if (status === '未接') used = null;
+    if (status === '未接' || status === '不适用') used = null;
     var pct = used !== null && limit !== null && limit > 0 ? used / limit * 100 : null;
-    return { m: m, id: m.id, used: used, limit: limit, status: status, reason: reason, age: age, collected: isFinite(collected) ? m.collectedAt : null, pct: pct };
+    return { m: m, id: m.id, used: used, limit: limit, status: status, reason: reason, age: age, pct: pct };
   }
 
-  function worst(list) {
-    var w = '正常';
-    list.forEach(function (e) { if (SEVERITY[e.status] > SEVERITY[w]) w = e.status; });
-    return w;
+  // 读不到 / 不提供 / 停更：返回 { kind, label }；有正常数值返回 null
+  function unread(e) {
+    if (e.status === '不适用') return { kind: 'none', label: KIND_LABEL.none };
+    if (e.status === '未更新' && e.used !== null) return { kind: 'stale', label: KIND_LABEL.stale };
+    if (e.used !== null && e.status !== '失败') return null;
+    if (e.used !== null && e.status === '失败') return { kind: 'stale', label: KIND_LABEL.stale };
+    if (e.status === '未接') return { kind: 'unwired', label: KIND_LABEL.unwired };
+    var kind = REASON_KIND[e.reason] || DETAIL_KIND[e.reason] || DETAIL_KIND[e.m.reasonDetail] || 'fail';
+    return { kind: kind, label: KIND_LABEL[kind] };
   }
 
-  // ---------- 行 ----------
+  // 后端标 alertEligible=false 的项（余额、账单、费用、不适用）不判色、不计入总体异常；用户 11-16「看板费用别给我算异常」
+  function notAlerting(e) { return MONEY.test(e.id) || (e.m && e.m.alertEligible === false); }
 
-  function hostOf(id) {
-    if (id === 'server.expiry_days') return HOSTS[1];
-    var m = /^server\.([a-z]+)\.([a-z_]+)$/.exec(id);
-    if (!m) return null;
-    for (var i = 0; i < HOSTS.length; i++) if (HOSTS[i][0] === m[1]) return HOSTS[i];
-    return null;
+  // 横幅和色调只认这几种；钱永远中性
+  function tone(e) {
+    if (MONEY.test(e.id)) return 'neutral';
+    if (e.m && e.m.alertEligible === false && !unread(e)) return 'neutral';
+    if (unread(e)) return 'unknown';
+    if (e.status === '警告') return 'alert';
+    if (e.status === '关注') return 'watch';
+    if (e.status === '正常') return 'ok';
+    return 'unknown';
   }
 
-  function shortName(e) {
-    if (e.id === 'server.expiry_days') return '到期';
-    if (e.id === 'server.raksmart.traffic' && e.m.source === 'subscription') return '订阅流量';
-    if (e.id === 'server.raksmart.reachable' && e.m.source === 'vps') return '本机上报';
-    var ali = ALI_ID.exec(e.id);
+  // 本次渲染登记过的项：横幅从这里数
+  var registry = [];
+  var registered = {};
+  // opt.anchor：几项合成一行显示时，横幅点名跳到那一行；opt.live：实时状态里的在线项
+  function register(id, name, e, counted, opt) {
+    if (registered[id]) return;
+    registered[id] = true;
+    opt = opt || {};
+    registry.push({ id: id, name: name, e: e, counted: counted !== false && !notAlerting(e), anchor: opt.anchor || anchorOf(id), live: !!opt.live });
+  }
+
+  // ---------- 小部件 ----------
+
+  function dot(t) { return '<span class="dot" data-t="' + t + '" aria-hidden="true"></span>'; }
+
+  function historyOf(id) {
+    var h = snapshot && snapshot.history && typeof snapshot.history === 'object' ? snapshot.history[id] : null;
+    if (!Array.isArray(h)) return null;
+    var list = h.filter(function (p) { return p && typeof p === 'object'; }).slice(-STRIP_SLOTS);
+    return list.length ? list : null;
+  }
+
+  function pointTone(p) {
+    var v = typeof p.v === 'number' && isFinite(p.v) ? p.v : null;
+    if (p.status === '警告' || v === 0) return 'alert';
+    if (v === null || (p.status && p.status !== '正常' && p.status !== '关注')) return 'none';
+    if (p.status === '关注') return 'watch';
+    return 'ok';
+  }
+
+  // 最近 N 次检查：一格一次，最新的在右；不满 48 次的左边留空格
+  function strip(id) {
+    var list = historyOf(id);
+    if (!list) return '';
+    var counts = { ok: 0, watch: 0, alert: 0, none: 0 };
+    var cells = '';
+    for (var i = 0; i < STRIP_SLOTS - list.length; i++) cells += '<i data-t="empty"></i>';
+    list.forEach(function (p) {
+      var t = pointTone(p);
+      counts[t]++;
+      var when = p.t && isFinite(Date.parse(p.t)) ? beijing(p.t) + ' ' : '';
+      var word = t === 'ok' ? '正常' : t === 'alert' ? '异常' : t === 'watch' ? '关注' : '没数据';
+      cells += '<i data-t="' + t + '" title="' + esc(when + word) + '"></i>';
+    });
+    var label = '最近 ' + list.length + ' 次检查：' + [['ok', '正常'], ['watch', '关注'], ['alert', '异常'], ['none', '没数据']]
+      .filter(function (k) { return counts[k[0]]; }).map(function (k) { return counts[k[0]] + ' 次' + k[1]; }).join('，');
+    return '<div class="strip" role="img" aria-label="' + esc(label) + '">' + cells + '</div>';
+  }
+
+  // 小折线：有两个以上数值点才画；纵轴从 0 到上限（没有上限就到最大值）
+  function spark(id, limit) {
+    var list = historyOf(id);
+    if (!list) return '';
+    var pts = list.map(function (p, i) { return { i: i, v: typeof p.v === 'number' && isFinite(p.v) ? p.v : null }; }).filter(function (p) { return p.v !== null; });
+    if (pts.length < 2) return '';
+    var W = 64, H = 20, pad = 2;
+    var max = limit && limit > 0 ? limit : Math.max.apply(null, pts.map(function (p) { return p.v; }));
+    if (!(max > 0)) max = 1;
+    var span = Math.max(1, list.length - 1);
+    var xy = pts.map(function (p) {
+      var x = pad + (W - 2 * pad) * (p.i / span);
+      var y = H - pad - (H - 2 * pad) * Math.max(0, Math.min(1, p.v / max));
+      return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
+    });
+    var last = xy[xy.length - 1];
+    return '<svg class="spark" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' +
+      '<polyline points="' + xy.map(function (p) { return p.join(','); }).join(' ') + '"/>' +
+      '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="2"/></svg>';
+  }
+
+  function bar(e) {
+    var p = Math.max(0, Math.min(100, e.pct));
+    return '<div class="bar" data-t="' + tone(e) + '" data-k="' + esc(e.id) + ':bar" data-p="' + p + '" style="--p:' + p + '%" aria-hidden="true"><span></span></div>';
+  }
+
+  // ---------- 1. 实时状态 ----------
+
+  function onlineRow(key, name, e, words, extra) {
+    var id = e ? e.id : extra && extra.entry ? extra.entry.id : 'missing.' + key;
+    var a = anchorOf(id);
+    var t, text;
+    if (extra && extra.tone) { t = extra.tone; text = '<span class="state' + (t === 'alert' ? '' : ' is-muted') + '">' + esc(extra.text) + '</span>'; }
+    else if (!e) { t = 'unknown'; text = '<span class="state is-muted">未接</span>'; }
+    else {
+      t = tone(e);
+      var u = unread(e);
+      if (u) text = '<span class="state is-muted">' + esc(u.label) + '</span>';
+      else if (e.used === 0) { t = 'alert'; text = '<span class="state">' + esc(words.down) + '</span>'; }
+      // 正常只留左边的小绿点，不再写「在线」（同一状态不两处标记）；有事才写短标签
+      else if (t === 'ok') text = '';
+      else text = '<span class="state">' + esc(t === 'alert' ? words.down : t === 'watch' ? '关注' : words.up) + '</span>';
+    }
+    if (e) register(id, name, e, true, { live: true });
+    else if (extra && extra.entry) register(extra.entry.id, name, extra.entry, true, { live: true });
+    var s = e ? strip(e.id) : '';
+    return '<li class="live" id="' + a + '" data-t="' + t + '"><span class="live-name">' + dot(t) + '<span>' + esc(name) + '</span></span>' +
+      '<span class="live-state">' + text + '</span>' + (s || '<span class="strip-none" aria-hidden="true"></span>') + '</li>';
+  }
+
+  function servicesCard(byId) {
+    var known = {};
+    var rows = SERVICES.map(function (s) {
+      var e = byId['service.' + s[0] + '.reachable'] || null;
+      if (!e) {
+        // 后端可能用别的后缀：取这一服务下第一个布尔项
+        Object.keys(byId).forEach(function (id) { if (!e && id.indexOf('service.' + s[0] + '.') === 0 && byId[id].m.unit === '布尔') e = byId[id]; });
+      }
+      if (!e && s[2]) e = byId[s[2]] || null;
+      known['service.' + s[0]] = true;
+      return onlineRow(s[0], s[1], e, { up: '在线', down: '连不上' });
+    });
+    // 快照里另有的服务也列出来
+    Object.keys(byId).forEach(function (id) {
+      var m = /^(service\.[a-z0-9_]+)\./.exec(id);
+      if (!m || known[m[1]] || byId[id].m.unit !== '布尔') return;
+      known[m[1]] = true;
+      rows.push(onlineRow(id, byId[id].m.label || m[1].slice(8), byId[id], { up: '在线', down: '连不上' }));
+    });
+    return '<section class="card" aria-labelledby="h-svc"><h3 class="card-title" id="h-svc">服务</h3><ul class="lives">' + rows.join('') + '</ul></section>';
+  }
+
+  // 主机表：阿里云实例 + server.<主机>.*，按 HOST_ORDER 排
+  function hostsOf(byId, ali) {
+    var hosts = [];
+    var seen = {};
     if (ali) {
-      if (ali[2] === 'traffic' && e.m.period === 'last-15-minutes') return '近 15 分钟出流量';
-      return HOST_SHORT[ali[2]] || e.m.label || e.id;
+      ali.instances.forEach(function (inst) {
+        var key = inst.alias || inst.id;
+        var get = function (k) { return byId['aliyun.' + inst.id + '.' + k] || null; };
+        hosts.push({ key: key, order: inst.alias === 'aleg' ? 0 : 0.5, name: inst.alias || inst.name, inst: inst,
+          reach: get('reachable'), cpu: get('cpu'), memory: get('memory'), disk: get('disk'), traffic: get('traffic') });
+        seen[key] = true;
+      });
+      if (!ali.instances.length && ali.entry) hosts.push({ key: 'aliyun', order: 0, name: '阿里云', entry: ali.entry });
     }
-    var m = /^server\.[a-z]+\.([a-z_]+)$/.exec(e.id);
-    if (m && HOST_SHORT[m[1]]) return HOST_SHORT[m[1]];
-    var d = /^(?:domain|cert)\.([a-z_]+)\.expiry_days$/.exec(e.id);
-    if (d) {
-      var all = DOMAINS.concat(CERTS);
-      for (var i = 0; i < all.length; i++) if (all[i][0] === d[1]) return all[i][1];
+    Object.keys(byId).forEach(function (id) {
+      var m = /^server\.([a-z0-9_]+)\.([a-z_]+)$/.exec(id);
+      if (!m || HOST_SKIP[m[1]] || seen[m[1]]) return;
+      var h = m[1];
+      seen[h] = true;
+      var get = function (k) { return byId['server.' + h + '.' + k] || null; };
+      var idx = HOST_ORDER.indexOf(h);
+      hosts.push({ key: h, order: idx >= 0 ? idx : HOST_ORDER.length, name: HOST_NAMES[h] || h, reach: get('reachable'),
+        cpu: get('cpu'), memory: get('memory'), disk: get('disk'),
+        // RakSmart 的「流量」是本机网卡流量；订阅流量算额度，放在额度和用量里
+        traffic: h === 'raksmart' ? get('host_traffic') : get('traffic') });
+    });
+    hosts.sort(function (a, b) { return a.order - b.order; });
+    return hosts;
+  }
+
+  function serversCard(hosts) {
+    var rows = hosts.map(function (h) {
+      if (h.entry) return onlineRow(h.key, h.name, h.entry, { up: '在线', down: '连不上' });
+      var vps = h.reach && h.reach.m.source === 'vps';
+      var words = vps ? { up: '在线', down: '没上报' } : { up: '在线', down: '连不上' };
+      var u = h.reach ? unread(h.reach) : null;
+      // 没有探测端口（不适用）的阿里云实例：写供应商给的运行状态，不当连通
+      if (h.inst && (!h.reach || (u && u.kind === 'none'))) {
+        var st = h.inst.status;
+        var tt = ALI_DOWN[st] ? 'alert' : st === 'Running' ? 'ok' : 'unknown';
+        var entry = { id: 'aliyun.' + h.inst.id + '.state', status: tt === 'alert' ? '警告' : tt === 'ok' ? '正常' : '未知',
+          used: tt === 'unknown' ? null : 1, reason: null, m: { id: 'aliyun.' + h.inst.id + '.state' } };
+        return onlineRow(h.key, h.name, null, words, { tone: tt, text: ALI_STATES[st] || ALI_STATES.Unknown, entry: entry });
+      }
+      return onlineRow(h.key, h.name, h.reach, words);
+    });
+    if (!rows.length) return '';
+    return '<section class="card" aria-labelledby="h-host"><h3 class="card-title" id="h-host">服务器</h3><ul class="lives">' + rows.join('') + '</ul></section>';
+  }
+
+  // ---------- 2. 服务器资源 ----------
+
+  function resourceRow(hostName, label, e) {
+    if (!e) return '';
+    var name = hostName + ' ' + label;
+    register(e.id, name, e);
+    var u = unread(e);
+    var value = '';
+    var unit = e.m.unit || '';
+    if (e.used !== null) {
+      if (unit === '%') value = num(e.id, '%', e.used);
+      else if (e.limit !== null && e.limit > 0) value = num(e.id, unit, e.used, usedOfLimit(unit, e.used, e.limit));
+      else value = num(e.id, unit, e.used);
     }
-    var dns = /^cf\.dns\.([a-z_]+)$/.exec(e.id);
-    if (dns) for (var j = 0; j < DOMAINS.length; j++) if (DOMAINS[j][0] === dns[1]) return DOMAINS[j][1] + ' DNS 记录';
-    return NAMES[e.id] || e.m.label || e.id;
+    var t = tone(e);
+    var head = '<div class="res-head"><span class="res-label">' + esc(label) + '</span>' + spark(e.id, unit === '%' ? 100 : e.limit) +
+      '<span class="res-value' + (u ? ' is-muted' : '') + '">' + (value ? '<span class="v">' + value + '</span>' : '') +
+      // 本机网卡流量从开始观测才计，月初那段没算，不能当整月
+      (e.m.complete === false && e.used !== null ? '<span class="state is-muted">统计不完整</span>' : '') +
+      (u ?'<span class="state is-muted">' + esc(u.label) + '</span>' : t === 'alert' || t === 'watch' ? dot(t) : '') + '</span></div>';
+    var body = e.pct !== null && e.used !== null ? bar(e) : '';
+    return '<li class="res" id="' + anchorOf(e.id) + '" data-t="' + t + '">' + head + body + '</li>';
   }
 
-  // 全名：跨组列表（需要留意）里用，带主机或证书前缀
-  function name(e) {
-    if (instanceOf[e.id]) return instanceOf[e.id].fullTitle + ' ' + shortName(e);
-    var h = hostOf(e.id);
-    if (h) return h[1] + ' ' + shortName(e);
-    if (/^cert\./.test(e.id)) return shortName(e) + ' 证书到期';
-    if (/^domain\.[a-z_]+\.expiry_days$/.test(e.id)) return shortName(e) + ' 域名到期';
-    var mm = /^manual\.([a-z_]+)\.expiry_days$/.exec(e.id);
-    if (mm) for (var i = 0; i < MANUALS.length; i++) if (MANUALS[i][0] === mm[1]) return MANUALS[i][1] + '到期';
-    if (/^sms\./.test(e.id)) return '短信' + shortName(e);
-    if (/^tencent_ses\./.test(e.id)) return '腾讯 SES ' + shortName(e);
-    if (/^huawei\./.test(e.id)) return '华为云' + shortName(e);
-    if (/^aliyun\./.test(e.id)) return '阿里云' + shortName(e);
-    return shortName(e);
+  function resourcesSection(hosts) {
+    var cards = hosts.map(function (h) {
+      if (h.entry) return '';
+      var list = RESOURCES.map(function (r) {
+        var e = h[r[0]];
+        // ECS 的流量是近 15 分钟的出方向流量，不是本月
+        var label = r[0] === 'traffic' && e && e.m.period === 'last-15-minutes' ? '15 分钟流量' : r[1];
+        return [label, e];
+      }).filter(function (x) { return x[1]; });
+      if (!list.length) return '';
+      // 四项都读不到且原因一样：一行写清
+      var first = unread(list[0][1]);
+      var same = list.length > 1 && first && list.every(function (x) { var u = unread(x[1]); return u && u.label === first.label && x[1].used === null; });
+      var inner;
+      if (same) {
+        list.forEach(function (x) { register(x[1].id, h.name + ' ' + x[0], x[1], true, { anchor: anchorOf(list[0][1].id) }); });
+        inner = '<p class="res-all" id="' + anchorOf(list[0][1].id) + '">' + list.map(function (x) { return x[0]; }).join('、') +
+          '<span class="state is-muted">' + esc(first.label) + '</span></p>';
+      } else {
+        inner = '<ul class="ress">' + list.map(function (x) { return resourceRow(h.name, x[0], x[1]); }).join('') + '</ul>';
+      }
+      return '<section class="card host" aria-label="' + esc(h.name) + '"><h3 class="card-title">' + esc(h.name) + '</h3>' + inner + '</section>';
+    }).join('');
+    if (!cards) return '';
+    return '<section class="sec" aria-labelledby="h-res"><h2 class="sec-title" id="h-res">服务器资源</h2><div class="hosts">' + cards + '</div></section>';
   }
 
-  function periodText(e) {
-    if (e.m.period === 'asia-shanghai-yesterday') return e.m.periodDate ? dayLabel(e.m.periodDate) + '的账单' : '昨日账单';
-    return PERIODS[e.m.period] || '';
+  // ---------- 3. 额度和用量 ----------
+
+  function usageRow(e, name) {
+    name = name || NAMES[e.id] || e.m.label || e.id;
+    register(e.id, name, e);
+    var u = unread(e);
+    var unit = e.m.unit || '';
+    var t = tone(e);
+    var right;
+    if (e.used === null) right = '<span class="state is-muted">' + esc(u ? u.label : '采集失败') + '</span>';
+    else if (e.limit !== null && e.limit > 0) right = num(e.id, unit, e.used, usedOfLimit(unit, e.used, e.limit));
+    else if (e.limit === 0) right = num(e.id, unit, e.used) + ' / 0';
+    else right = num(e.id, unit, e.used);
+    // R2 有本月没归类的操作（reasonDetail=r2_unclassified_operations:N）：已归类的合计照常显示，名字下面一行 12 号字写未归类次数
+    // （放在右边会把「R2 B 类操作」挤成几行）
+    var unc = /^r2_unclassified_operations:(0|[1-9][0-9]*)$/.exec(e.m.reasonDetail || '');
+    var note = unc && e.used !== null ? '<p class="use-note">未归类 ' + esc(fmt('', Number(unc[1]))) + ' 次</p>' : '';
+    if (u && e.used !== null) right += '<span class="state is-muted">' + esc(u.label) + '</span>';
+    else if (t === 'alert' || t === 'watch') right += dot(t);
+    var body = e.pct !== null && e.used !== null ? bar(e) : '';
+    return '<li class="use' + (body ? '' : ' no-bar') + '" id="' + anchorOf(e.id) + '" data-t="' + t + '"><div class="use-head"><span class="use-name">' + esc(name) + '</span>' +
+      '<span class="use-value">' + right + '</span></div>' + note + body + '</li>';
   }
 
-  function stateNote(e, groupTime) {
-    var parts = [];
-    var when = e.collected ? '，下面是 ' + beijing(e.collected) + ' 采集的旧值' : '，下面是上次的旧值';
-    if (e.status === '未更新' && e.used !== null) {
-      var why = (e.reason === 'stale' || !reasonText(e)) && e.age !== null ? '已停更 ' + duration(e.age) : (reasonText(e) || '本次未更新');
-      parts.push(why + when);
-    } else if (e.status === '失败' && e.used !== null) {
-      parts.push((reasonText(e) || '本次读取失败') + when);
-    } else if (e.collected && groupTime && e.collected !== groupTime) {
-      parts.push(beijing(e.collected) + ' 采集');
+  // 短信：当天、本月各一行，写发送条数和失败回执
+  function smsRow(byId, key, name) {
+    var sent = byId['sms.' + key + '.sent'];
+    var failed = byId['sms.' + key + '.failed'];
+    var success = byId['sms.' + key + '.success'];
+    if (!sent) return '';
+    [sent, failed, success].forEach(function (e) { if (e) register(e.id, '短信' + name + NAMES_SMS[e.id.split('.').pop()], e, true, { anchor: anchorOf(sent.id) }); });
+    var all = [sent, failed, success].filter(Boolean);
+    var worstE = all.filter(function (e) { return tone(e) === 'alert'; })[0] || all.filter(function (e) { return tone(e) === 'watch'; })[0];
+    var u = unread(sent);
+    var right;
+    if (sent.used === null) right = '<span class="state is-muted">' + esc(u ? u.label : '采集失败') + '</span>';
+    else {
+      right = num(sent.id, '条', sent.used);
+      if (failed && failed.used !== null) right += '<span class="sub">失败 ' + esc(fmt('', failed.used)) + '</span>';
+      if (worstE) right += dot(tone(worstE));
     }
-    return parts;
+    return '<li class="use no-bar" id="' + anchorOf(sent.id) + '"><div class="use-head"><span class="use-name">短信' + esc(name) + '</span><span class="use-value">' + right + '</span></div></li>';
+  }
+  var NAMES_SMS = { sent: '发送', success: '成功回执', failed: '失败回执' };
+
+  function sortUsage(list) {
+    var rank = { alert: 0, watch: 1 };
+    return list.map(function (x, i) { return { x: x, i: i, r: x.e ? (rank[tone(x.e)] !== undefined ? rank[tone(x.e)] : 2) : 2 }; })
+      .sort(function (a, b) { return a.r - b.r || a.i - b.i; }).map(function (o) { return o.x; });
   }
 
-  function missingText(e) {
-    if (e.status === '不适用') return reasonText(e) || '此项不适用';
-    if (e.status === '未接') return reasonText(e) || REASONS.key_missing;
-    if (e.status === '未知') return '数值未知，不按 0 计算';
-    var r = reasonText(e);
-    if (e.status === '未更新') return (r || '本次未更新') + '，暂时没有数值';
-    return (r || '读取失败') + '，暂时没有数值';
+  // 接近 0 的额度行：有上限、有数、状态正常、用量低于 NEAR_ZERO_PCT。钱不在这一块，不受影响
+  function nearZero(x) {
+    var e = x.e;
+    return !x.sms && e && tone(e) === 'ok' && e.used !== null && e.pct !== null && e.pct < NEAR_ZERO_PCT;
   }
 
-  function finite(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
-
-  // 第二版可选字段：有 thresholds（direction=above）就按它画刻度，没有就画合同默认的 50% 和 80%
-  function aboveThresholds(e) {
-    var t = e.m.thresholds;
-    if (!t || t.direction !== 'above' || finite(t.attention) === null || finite(t.warning) === null) return null;
-    return { attention: t.attention, warning: t.warning, urgent: finite(t.urgent) };
+  function usageSection(byId, openSet) {
+    var groups = USAGE_GROUPS.map(function (g, gi) {
+      var items = [];
+      g[1].forEach(function (id) {
+        if (id === '@sms.day') items.push({ html: smsRow(byId, 'day', '今天'), e: byId['sms.day.sent'], sms: true });
+        else if (id === '@sms.month') items.push({ html: smsRow(byId, 'month', '本月'), e: byId['sms.month.sent'], sms: true });
+        else if (byId[id]) {
+          var e = byId[id];
+          var dns = /^cf\.dns\.([a-z_]+)$/.exec(id);
+          var name = null;
+          if (dns) DOMAINS.forEach(function (d) { if (d[0] === dns[1]) name = d[1] + ' DNS 记录'; });
+          items.push({ html: usageRow(e, name), e: e });
+        }
+      });
+      items = items.filter(function (x) { return x.html; });
+      if (!items.length) return '';
+      var shown = sortUsage(items.filter(function (x) { return !nearZero(x); }));
+      var rest = items.filter(nearZero);
+      var html = shown.map(function (x) { return x.html; }).join('');
+      // 只有一项时不收：收起一行再换出一行，没省下什么
+      if (rest.length === 1) html += rest[0].html;
+      else if (rest.length) {
+        var key = 'rest-' + gi;
+        html += '<li class="rest"><details data-fold="' + key + '"' + (openSet[key] ? ' open' : '') + '><summary>其余 ' + rest.length + ' 项正常</summary>' +
+          '<ul class="uses">' + rest.map(function (x) { return x.html; }).join('') + '</ul></details></li>';
+      }
+      return '<div class="use-group"><h3 class="group-title">' + esc(g[0]) + '</h3><ul class="uses">' + html + '</ul></div>';
+    }).join('');
+    if (!groups) return '';
+    return '<section class="sec sec-usage" aria-labelledby="h-use"><h2 class="sec-title" id="h-use">额度和用量</h2><div class="card"><div class="usage">' + groups + '</div></div></section>';
   }
 
-  function tickPositions(e) {
-    var th = aboveThresholds(e);
-    if (!th || !(e.limit > 0)) return [{ left: 50 }, { left: 80 }];
-    var list = [{ left: th.attention / e.limit * 100 }, { left: th.warning / e.limit * 100 }];
-    if (th.urgent !== null) list.push({ left: th.urgent / e.limit * 100, urgent: true });
-    return list.filter(function (t) { return t.left > 0 && t.left < 100; });
+  // ---------- 4. 钱 ----------
+
+  function moneySection(byId) {
+    var rows = MONEY_IDS.map(function (id) {
+      var e = byId[id];
+      if (!e) return '';
+      register(e.id, NAMES[id], e, false);
+      var u = unread(e);
+      var value = e.used === null ? '<span class="state is-muted">' + esc(u ? u.label : '采集失败') + '</span>'
+        : num(e.id, e.m.unit || '', e.used) + (u ? '<span class="state is-muted">' + esc(u.label) + '</span>' : '');
+      return '<li class="money" id="' + anchorOf(id) + '"><span class="money-name">' + esc(NAMES[id]) + '</span><span class="money-value">' + value + '</span></li>';
+    }).join('');
+    if (!rows) return '';
+    return '<section class="sec sec-money" aria-labelledby="h-money"><h2 class="sec-title" id="h-money">钱</h2><ul class="card moneys">' + rows + '</ul></section>';
   }
 
-  // 轻量服务器到期：天数可以为负；有 expiresAt 就按现在重算，重算不改 collectedAt，也不改停更判断
+  // ---------- 5. 折叠：到期、报到人数、后台链接 ----------
   function daysText(d) {
     if (d > 0) return '还剩 ' + intFmt.format(d) + ' 天';
     if (d === 0) return '今天到期';
     return '已过期 ' + intFmt.format(-d) + ' 天';
   }
 
-  function isExpiry(e) {
-    var t = e.m.thresholds;
-    return !!(t && t.direction === 'below') || e.m.unit === '天';
-  }
 
   function remainingDays(e) {
     var expires = e.m.expiresAt && isFinite(Date.parse(e.m.expiresAt)) ? e.m.expiresAt : null;
     return expires ? Math.ceil((Date.parse(expires) - now()) / 86400000) : e.used;
   }
 
-  function expiresText(iso) {
-    // 只有日期的（WHOIS、手填）保留日期，不捏造时刻
-    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '到期日 ' + dayLabel(iso);
-    return '到期 ' + beijing(iso) + '（北京时间）';
+  function expiryList(byId, ali) {
+    var list = [];
+    var add = function (id, name) { if (byId[id]) list.push({ e: byId[id], name: name }); };
+    if (ali) ali.instances.forEach(function (inst) { add('aliyun.' + inst.id + '.expiry_days', (inst.alias || inst.name) + ' 到期'); });
+    add('server.expiry_days', NAMES['server.expiry_days']);
+    add('server.raksmart.expiry_days', NAMES['server.raksmart.expiry_days']);
+    add('server.raksmart.subscription_expiry_days', NAMES['server.raksmart.subscription_expiry_days']);
+    DOMAINS.forEach(function (d) { add('domain.' + d[0] + '.expiry_days', d[1] + ' 域名'); });
+    CERTS.forEach(function (c) { add('cert.' + c[0] + '.expiry_days', c[1] + ' 证书'); });
+    MANUALS.forEach(function (m) { add('manual.' + m[0] + '.expiry_days', m[1]); });
+    // 这家不提供到期日（按量付费等）的不列
+    return list.filter(function (x) { var u = unread(x.e); return !(u && u.kind === 'none'); });
   }
 
-  function manualNote(e) {
-    if (!e.m.asOf) return '';
-    return '截至 ' + dayLabel(e.m.asOf) + ' 手填';
+  // 展开后电脑宽分两栏 / 三栏，用网格按列排（先排满第一栏）：每栏几行在这里算好写进 --r2 / --r3，
+  // 每栏第一行标 data-top2 / data-top3，样式据此不画上边线（多栏流排会把行间细线带到栏顶）
+  function fold(key, title, count, unit, inner, open) {
+    var n = (inner.match(/<li\b/g) || []).length;
+    var r2 = Math.max(1, Math.ceil(n / 2)), r3 = Math.max(1, Math.ceil(n / 3)), k = 0;
+    inner = inner.replace(/<li\b/g, function () { var i = k++; return '<li' + (i % r2 ? '' : ' data-top2') + (i % r3 ? '' : ' data-top3'); })
+      .replace(/^<ul\b/, '<ul style="--r2:' + r2 + ';--r3:' + r3 + '"');
+    return '<details class="card fold" data-fold="' + key + '"' + (open ? ' open' : '') + '><summary><span class="fold-title">' + esc(title) +
+      '</span><span class="fold-count">' + count + ' ' + unit + '</span></summary>' + inner + '</details>';
   }
 
-  // 手填项的 collectedAt 是截至日零点，不写「几点采集」，停更照写
-  function stateFor(e, groupTime) {
-    var list = stateNote(e, groupTime);
-    if (e.m.asOf) list = list.filter(function (x) { return !/ 采集$/.test(x); });
-    return list;
-  }
-
-  function linkHtml(text, url) {
-    if (!url || !/^https:\/\//.test(url)) return '';
-    return '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(text) + '</a>';
-  }
-
-  function noteHtml(notes, link) {
-    notes = notes.filter(Boolean);
-    if (!notes.length && !link) return '';
-    return '<p class="row-note">' + esc(notes.join('，')) + (link ? (notes.length ? '，' : '') + link : '') + '</p>';
-  }
-
-  function rowHead(label, right) {
-    return '<div class="row-head"><span class="row-name">' + esc(label) + '</span><span class="row-right">' + right + '</span></div>';
-  }
-
-  function expiryRow(e, groupTime, label, extra) {
-    var right = '';
-    var notes = [];
-    if (e.used !== null) {
-      right = '<span class="row-pct">' + esc(daysText(remainingDays(e))) + '</span>';
-      if (e.m.expiresAt) notes.push(expiresText(e.m.expiresAt));
-      if (e.m.expiresAt && remainingDays(e) !== e.used) notes.push('采集时' + daysText(e.used));
-      if (!e.m.expiresAt) notes.push('采集时的天数，没有到期时间可重算');
-    } else {
-      notes.push(missingText(e));
-    }
-    notes.push(manualNote(e));
-    var state = stateFor(e, groupTime);
-    // 天数已按到期时间重算，不是旧值；停更、失败照样写出来
-    if (e.m.expiresAt && e.used !== null) state = state.map(function (x) { return x.replace(/，下面是.*旧值$/, '，到期时间是上次取到的'); });
-    notes = notes.concat(state, extra || []);
-    return '<li class="row">' + rowHead(label || shortName(e), right + badge(e.status)) + noteHtml(notes) + '</li>';
-  }
-
-  // 没有上限的单个数：名称 / 数值 + 徽标，一行说明
-  function valueRow(e, groupTime, label, extra, text) {
-    var unit = e.m.unit || '';
-    var right = e.used === null ? '' : '<span class="row-pct">' + (text ? esc(text) : num(e.id, unit, e.used)) + '</span>';
-    var notes = e.used === null ? [missingText(e)] : [];
-    notes.push(manualNote(e));
-    notes = notes.concat(stateFor(e, groupTime), extra || []);
-    var link = e.m.consoleUrl ? linkHtml('去后台看', e.m.consoleUrl) : '';
-    return '<li class="row">' + rowHead(label || shortName(e), right + badge(e.status)) + noteHtml(notes, link) + '</li>';
-  }
-
-  var BILLING_MODES = { 0: '按需', 1: '预付费', 2: '竞价' };
-
-  // 服务器每一行按单位分派
-  function hostRow(e, t) {
-    var unit = e.m.unit;
-    if (isExpiry(e)) return expiryRow(e, t);
-    if (unit === '布尔' && e.m.source === 'vps') return valueRow(e, t, null, null, e.used === 1 ? '已收到' : '');
-    if (unit === '布尔') return valueRow(e, t, null, null, e.used === 1 ? '连得上' : e.used === 0 ? '连不上' : '');
-    if (unit === '枚举') return valueRow(e, t, null, null, BILLING_MODES[e.used] || '未知方式');
-    if (e.m.accounting === 'quote_compute_only_not_invoice') return valueRow(e, t, null, ['只是计算实例询价，不含磁盘和带宽，不是账单']);
-    if (e.m.source === 'localTraffic' || e.m.complete === false) return meterRow(e, t, null, trafficGap(e));
-    if (e.m.source === 'subscription') return meterRow(e, t, null, { notes: ['订阅的上传加下载，不是 RakSmart 网卡账单，和本机流量不能相加'] });
-    if (e.m.accounting === 'ecs_monitor_outgoing_not_invoice') return valueRow(e, t, null, ['云监控的出方向流量，不是账单']);
-    if (/最高磁盘/.test(e.m.label || '') && ALI_ID.test(e.id)) return meterRow(e, t, null, { notes: ['取各块磁盘中最高的'] });
-    if (e.limit !== null || unit === '%') return meterRow(e, t);
-    return valueRow(e, t);
-  }
-
-  // 本机网卡流量：首月缺启用前的量，不是供应商账单
-  function trafficGap(e) {
-    if (e.m.complete !== false) return null;
-    var since = e.m.observedSince && isFinite(Date.parse(e.m.observedSince)) ? '从 ' + beijing(e.m.observedSince) + ' 开始计' : '开始计数时间未知';
-    return { tag: '统计不完整', notes: [since + '，之前的流量没算', '本机网卡计数，不是服务商账单，服务商按每月 10 日重置'] };
-  }
-
-  function meterRow(e, groupTime, label, gap) {
-    var unit = e.m.unit || '';
-    var head = '<div class="row-head"><span class="row-name">' + esc(label || shortName(e)) + '</span><span class="row-right">';
-    if (gap && gap.tag) head += '<span class="tag">' + esc(gap.tag) + '</span>';
-    if (e.pct !== null && e.used !== null) head += '<span class="row-pct">' + num(e.id + ':pct', 'pct', e.pct) + '</span>';
-    head += badge(e.status) + '</span></div>';
-
-    var body = '';
-    var fig = '';
-    if (e.used === null) {
-      if (e.limit !== null && e.limit > 0) body = '<div class="meter-empty" aria-hidden="true"></div>';
-      fig = missingText(e);
-      if (e.limit !== null) fig += '<span class="gap"> </span>' + (e.limit === 0 ? '无可用额度' : '<span class="nw">上限 ' + esc(fmt(unit, e.limit)) + '</span>');
-    } else if (e.limit === null) {
-      fig = '<b>' + num(e.id, unit, e.used) + '</b><span class="gap"> </span>' + (/^cf\.dns\./.test(e.id) ? '上限未确认' : '无已知上限');
-    } else if (e.limit === 0) {
-      fig = '已用 <b>' + num(e.id, unit, e.used) + '</b><span class="gap"> </span>无可用额度';
-    } else {
-      var p = Math.max(0, Math.min(100, e.pct));
-      var ticks = tickPositions(e).map(function (t) {
-        return '<span class="meter-tick' + (t.urgent ? ' is-urgent' : '') + '" style="left:' + t.left + '%"></span>';
-      }).join('');
-      body = '<div class="meter" data-s="' + esc(e.status) + '" data-k="' + esc(e.id) + ':bar" data-p="' + p + '" style="--p:' + p + '%" role="img" aria-label="' + esc(name(e) + ' 已用 ' + fmt('pct', e.pct)) + '">' +
-        '<span class="meter-fill"></span>' + ticks + '</div>';
-      // 百分比项上限就是 100%，不再重复写已用 / 上限 / 剩余
-      if (unit === '%') fig = '';
-      else {
-        // 「已用 X」「上限 Y」「剩余 N」「超出 N」各自整段不拆，折行只发生在段与段之间
-        fig = '<span class="nw">已用 <b>' + num(e.id, unit, e.used) + '</b></span> / <span class="nw">上限 ' + esc(fmt(unit, e.limit)) + '</span>' +
-          '<span class="gap"> </span><span class="nw">剩余 <b>' + num(e.id + ':left', unit, Math.max(0, e.limit - e.used)) + '</b></span>';
-        if (e.used > e.limit) fig += '<span class="gap"> </span><span class="nw">超出 <b>' + num(e.id + ':over', unit, e.used - e.limit) + '</b></span>';
-      }
-    }
-
-    var notes = [unit === '%' && e.m.period === 'as-of-collection' ? '' : periodText(e)];
-    if (EXTRA_NOTES[e.id]) notes.push(EXTRA_NOTES[e.id]);
-    if (gap && gap.notes) notes = notes.concat(gap.notes);
-    var th = aboveThresholds(e);
-    if (th && th.urgent !== null) {
-      notes.push(e.used !== null && e.used >= th.urgent ? '已过紧急线 ' + fmt(unit, th.urgent) : '最右一条刻度是紧急线 ' + fmt(unit, th.urgent));
-    }
-    notes = notes.concat(stateNote(e, groupTime)).filter(Boolean);
-    return '<li class="row">' + head + body + (fig ? '<p class="row-fig">' + fig + '</p>' : '') +
-      (notes.length ? '<p class="row-note">' + esc(notes.join('，')) + '</p>' : '') + '</li>';
-  }
-
-  function moneyRow(e, groupTime) {
-    var unit = e.m.unit || '';
-    var head = '<div class="row-head"><span class="row-name">' + esc(shortName(e)) + '</span><span class="row-right">' + badge(e.status) + '</span></div>';
-    var fig = e.used === null ? '<p class="row-fig">' + esc(missingText(e)) + '</p>'
-      : '<p class="row-fig"><span class="row-value">' + num(e.id, unit, e.used) + '</span></p>';
-    var notes = [];
-    if (e.id === 'aliyun.yesterday_bill') notes.push(periodText(e), '账单晚一天出，是应付金额，不等于已经扣款');
-    else if (e.id === 'huawei.coupons') notes.push('代金券有适用范围，不能当现金');
-    else notes.push(periodText(e));
-    if (EXTRA_NOTES[e.id]) notes.push(EXTRA_NOTES[e.id]);
-    notes = notes.concat(stateNote(e, groupTime)).filter(Boolean);
-    return '<li class="row">' + head + fig + '<p class="row-note">' + esc(notes.join('，')) + '</p></li>';
-  }
-
-  function countRow(e, groupTime) {
-    var right = e.used === null ? badge(e.status)
-      : '<span class="row-value">' + num(e.id, '', e.used) + '</span>' + (e.status === '正常' ? '' : badge(e.status));
-    var notes = e.used === null ? [missingText(e)] : stateNote(e, groupTime);
-    return '<li class="row"><div class="row-head"><span class="row-name">' + esc(shortName(e)) + '</span><span class="row-right">' + right + '</span></div>' +
-      (notes.length ? '<p class="row-note">' + esc(notes.join('，')) + '</p>' : '') + '</li>';
-  }
-
-  // ---------- 卡片 ----------
-
-  function groupTimeOf(list) {
-    var latest = null;
-    list.forEach(function (e) { if (e.collected && (!latest || Date.parse(e.collected) > Date.parse(latest))) latest = e.collected; });
-    return latest;
-  }
-
-  function card(key, list, inner, extraMeta, noTime) {
-    var w = list.length ? worst(list) : '未接';
-    var t = noTime ? null : groupTimeOf(list);
-    var meta = [];
-    if (t) meta.push(beijing(t) + ' 采集');
-    if (extraMeta) meta.push(extraMeta);
-    return '<section class="card" aria-labelledby="g-' + key + '"><div class="card-head"><h2 class="card-title" id="g-' + key + '">' + GROUP_NAMES[key] + '</h2>' + badge(w) + '</div>' +
-      (meta.length ? '<p class="card-meta">' + esc(meta.join('，')) + '</p>' : '') + inner + '</section>';
-  }
-
-  function pick(byId, ids) { return ids.map(function (id) { return byId[id]; }).filter(Boolean); }
-
-  function cloudflareCard(byId) {
-    var subs = [
-      ['Workers', ['cf.requests', 'cf.errors', 'cf.cpu_p99_max']],
-      ['D1 数据库', ['cf.d1.read', 'cf.d1.write', 'cf.d1.storage', 'cf.d1.largest']],
-      ['KV 存储', ['cf.kv.read', 'cf.kv.write', 'cf.kv.delete', 'cf.kv.list', 'cf.kv.storage']],
-      ['R2 对象存储', ['cf.r2.a', 'cf.r2.b', 'cf.r2.storage']],
-      // windrisebridge.cn 的 DNS 在 DNSPod，不在 Cloudflare，合同没有这一项；它的域名到期和证书在「域名与证书」卡
-      ['隧道与 DNS', ['cf.tunnels'].concat(DOMAINS.filter(function (d) { return d[0] !== 'windrisebridge_cn'; }).map(function (d) { return 'cf.dns.' + d[0]; }))]
-    ];
-    var all = [];
-    subs.forEach(function (s) { all = all.concat(pick(byId, s[1])); });
-    var t = groupTimeOf(all);
-    var inner = subs.map(function (s) {
-      var list = pick(byId, s[1]);
-      if (!list.length) return '';
-      return '<h3 class="sub-title">' + esc(s[0]) + '</h3><ul class="rows">' + list.map(function (e) { return meterRow(e, t); }).join('') + '</ul>';
+  function expiryFold(byId, ali, openSet) {
+    var list = expiryList(byId, ali);
+    if (!list.length) return '';
+    list.forEach(function (x) { x.days = x.e.used === null ? null : remainingDays(x.e); register(x.e.id, x.name, x.e); });
+    list.sort(function (a, b) { return (a.days === null ? 1e9 : a.days) - (b.days === null ? 1e9 : b.days); });
+    var hot = list.some(function (x) { var tt = tone(x.e); return tt === 'alert' || tt === 'watch'; });
+    var rows = list.map(function (x) {
+      var t = tone(x.e);
+      var u = unread(x.e);
+      var right = x.days === null ? '<span class="state is-muted">' + esc(u ? u.label : '采集失败') + '</span>' : '<span class="num">' + esc(daysText(x.days)) + '</span>' + (u ? '<span class="state is-muted">' + esc(u.label) + '</span>' : '');
+      return '<li class="kv" id="' + anchorOf(x.e.id) + '" data-t="' + t + '"><span class="kv-name">' + (t === 'alert' || t === 'watch' ? dot(t) : '') + esc(x.name) + '</span><span class="kv-value">' + right + '</span></li>';
     }).join('');
-    return card('cloudflare', all, inner, '平台统计的用量，不是账单，不代表已经扣费');
+    return fold('expiry', '到期', list.length, '项', '<ul class="kvs">' + rows + '</ul>', hot || openSet.expiry);
   }
 
-  function aliyunCard(byId) {
-    var ali = pick(byId, ['aliyun.available', 'aliyun.cash', 'aliyun.yesterday_bill']);
-    var hw = pick(byId, ['huawei.cash', 'huawei.coupons']);
-    var t = groupTimeOf(ali.concat(hw));
-    var inner = '<h3 class="sub-title">阿里云</h3><ul class="rows">' + ali.map(function (e) { return moneyRow(e, t); }).join('') + '</ul>';
-    if (hw.length) inner += '<h3 class="sub-title">华为云</h3><ul class="rows">' + hw.map(function (e) { return moneyRow(e, t); }).join('') + '</ul>';
-    return card('aliyun', ali.concat(hw), inner);
+  function businessFold(byId, budget, openSet) {
+    var ids = ['business.recent_hour', 'business.today', 'business.members.free', 'business.members.monthly', 'business.members.quarterly',
+      'business.members.yearly', 'business.members.trial', 'business.members.manual', 'business.members.other'];
+    var rows = ids.filter(function (id) { return byId[id]; }).map(function (id) {
+      var e = byId[id];
+      register(id, '报到 ' + NAMES[id], e, false);
+      var u = unread(e);
+      var unit = /^business\.(recent_hour|today)$/.test(id) ? '台' : '个';
+      var right = e.used === null ? '<span class="state is-muted">' + esc(u ? u.label : '采集失败') + '</span>' : num(e.id, unit, e.used) + (u ? '<span class="state is-muted">' + esc(u.label) + '</span>' : '');
+      return '<li class="kv" id="' + anchorOf(id) + '"><span class="kv-name">' + esc(NAMES[id]) + '</span><span class="kv-value">' + right + '</span></li>';
+    });
+    if (budget && typeof budget.limit === 'number' && budget.limit > 0 && typeof budget.used === 'number') {
+      var e = { id: 'budget', m: { id: 'budget', unit: '行' }, used: budget.used, limit: budget.limit, pct: budget.used / budget.limit * 100,
+        status: budget.used > budget.limit ? '警告' : '正常', reason: null };
+      register('budget', '统计读行预算', e);
+      rows.push('<li class="use" id="m-budget" data-t="' + tone(e) + '"><div class="use-head"><span class="use-name">统计读行预算</span><span class="use-value">' +
+        num('budget', '行', budget.used, usedOfLimit('行', budget.used, budget.limit)) + '</span></div>' + bar(e) + '</li>');
+    }
+    if (!rows.length) return '';
+    return fold('business', '报到人数', rows.length, '项', '<ul class="kvs">' + rows.join('') + '</ul>', openSet.business);
   }
 
-  // 短信：今日 / 本月 × 计费发送 / 成功回执 / 失败回执，三列小表，空格写原因不写 0
-  function smsTable(byId) {
-    var cols = [['sent', '计费发送'], ['success', '成功回执'], ['failed', '失败回执']];
-    var rows = [['day', '今日'], ['month', '本月']];
-    var cells = [];
-    var head = '<tr><th scope="col"></th>' + cols.map(function (c) { return '<th scope="col">' + c[1] + '</th>'; }).join('') + '</tr>';
-    var body = rows.map(function (r) {
-      return '<tr><th scope="row">' + r[1] + '</th>' + cols.map(function (c) {
-        var e = byId['sms.' + r[0] + '.' + c[0]];
-        if (!e) return '<td>—</td>';
-        cells.push(e);
-        if (e.used === null) return '<td class="is-missing">' + esc(e.status) + '</td>';
-        var mark = e.status === '正常' ? '' : ' data-s="' + esc(e.status) + '"';
-        return '<td' + mark + '>' + num(e.id, '', e.used) + (e.status === '正常' ? '' : '<span class="cell-s">' + esc(e.status) + '</span>') + '</td>';
-      }).join('') + '</tr>';
+  var LINK_ICON = '<svg class="ico" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg>';
+
+  function linksFold(list, openSet) {
+    var links = BACKEND.slice();
+    var seen = {};
+    links.forEach(function (l) { seen[l[1]] = true; });
+    list.forEach(function (e) {
+      var url = e.m.consoleUrl;
+      if (!url || !/^https:\/\//.test(url) || seen[url]) return;
+      var name = null;
+      CONSOLE_NAMES.forEach(function (c) { if (!name && c[0].test(e.id)) name = c[1]; });
+      if (!name) return;
+      seen[url] = true;
+      links.push([name, url]);
+    });
+    var rows = links.map(function (l) {
+      return '<li><a href="' + esc(l[1]) + '" target="_blank" rel="noopener noreferrer">' + LINK_ICON + '<span>' + esc(l[0]) + '</span></a></li>';
     }).join('');
-    if (!cells.length) return { html: '', list: [] };
-    return { html: '<table class="mini">' + head + body + '</table>', list: cells };
+    return fold('links', '后台链接', links.length, '个', '<ul class="links">' + rows + '</ul>', openSet.links);
   }
 
-  function mailCard(byId) {
-    var dm = pick(byId, ['mail.total_free', 'mail.daily_free']);
-    var ses = pick(byId, ['tencent_ses.month.sent', 'tencent_ses.gift_remaining']);
-    var sms = smsTable(byId);
-    var smsMore = pick(byId, ['sms.month.estimated_cost', 'sms.package_remaining']);
-    var all = dm.concat(ses, sms.list, smsMore);
-    var t = groupTimeOf(all);
-    var inner = '<h3 class="sub-title">阿里云 DirectMail</h3><ul class="rows">' + dm.map(function (e) { return meterRow(e, t); }).join('') + '</ul>';
-    if (ses.length) {
-      inner += '<h3 class="sub-title">腾讯 SES</h3><ul class="rows">' + ses.map(function (e) {
-        return valueRow(e, t, null, e.id === 'tencent_ses.gift_remaining' ? ['公开统计不返回余额，按手填'] : [periodText(e)]);
-      }).join('') + '</ul>';
+  // ---------- 横幅 ----------
+
+  function banner(snap, t) {
+    var stale = snap && snap.generatedAt && isFinite(Date.parse(snap.generatedAt)) ? t - Date.parse(snap.generatedAt) : null;
+    if (!snap) {
+      return bannerHtml('unknown', loadProblem ? '读不到快照' : '正在读取', loadProblem ? '<p class="banner-sub">' + esc(loadProblem) + '</p>' : '');
     }
-    if (sms.list.length || smsMore.length) {
-      inner += '<h3 class="sub-title">阿里云短信</h3>';
-      if (sms.list.length && sms.list.every(function (e) { return e.used === null; })) {
-        inner += '<p class="row-note">发送和回执：' + esc(missingText(sms.list[0])) + '</p>';
-      } else inner += sms.html + '<p class="row-note">北京时间；计费条数和回执分开计，不相加</p>';
-      inner += '<ul class="rows">' + smsMore.map(function (e) {
-        return valueRow(e, t, null, e.id === 'sms.month.estimated_cost' ? ['按普通单价估算，没扣资源包，不是实际扣款'] : ['只算有效的短信资源包']);
-      }).join('') + '</ul>';
+    var counted = registry.filter(function (r) { return r.counted; });
+    var alerts = counted.filter(function (r) { return tone(r.e) === 'alert'; });
+    var watches = counted.filter(function (r) { return tone(r.e) === 'watch'; });
+    // 读不到（待授权、采集失败、未更新）和未接都算「读不到」：在线状态未接时同样不能说「全部正常」
+    var dark = counted.filter(function (r) { var u = unread(r.e); return u && u.kind !== 'none'; });
+    var extra = loadProblem ? '<p class="banner-sub">' + esc(loadProblem) + '</p>' : '';
+    if (stale !== null && (stale > SNAPSHOT_STALE_MS || stale < 0)) {
+      var head = stale < 0 ? '快照时间不对' : '数据停更 ' + duration(stale);
+      return bannerHtml('unknown', head, '<p class="banner-sub">' + esc(stale < 0 ? '快照时间晚于本机时间' : '下面是 ' + beijing(snap.generatedAt) + ' 的数') + '</p>' + extra);
     }
-    return card('mail', all, inner);
+    var darkLine = dark.length ? '<p class="banner-sub">另有 ' + dark.length + ' 项读不到</p>' : '';
+    if (alerts.length) {
+      return bannerHtml('alert', alerts.length + ' 项异常', namesLine(alerts) + (watches.length ? '<p class="banner-sub">另有 ' + watches.length + ' 项需要注意</p>' : '') + darkLine + extra);
+    }
+    if (watches.length) return bannerHtml('watch', watches.length + ' 项需要注意', namesLine(watches) + darkLine + extra);
+    // 服务、服务器在不在线读不到时不能说「全部正常」：横幅转灰，点名是哪几项
+    var liveDark = dark.filter(function (r) { return r.live; });
+    if (liveDark.length) {
+      var rest = dark.length - liveDark.length;
+      return bannerHtml('unknown', liveDark.length + ' 项在线状态读不到', namesLine(liveDark) + (rest ? '<p class="banner-sub">另有 ' + rest + ' 项读不到</p>' : '') + extra);
+    }
+    return bannerHtml('ok', '全部正常', darkLine + extra);
   }
 
-  // rows 省略时就是 list；徽标始终按整块 list 取最严重的
-  function hostBlock(title, list, meta, extra, link, rows) {
-    var t = groupTimeOf(list);
-    rows = rows || list;
-    return '<section class="host" aria-label="' + esc(title) + '"><div class="host-head"><h3 class="host-title">' + esc(title) + '</h3>' + badge(worst(list)) + '</div>' +
-      (meta ? '<p class="row-note host-meta">' + esc(meta) + '</p>' : '') +
-      (rows.length ? '<ul class="rows">' + rows.map(function (e) { return hostRow(e, t); }).join('') + '</ul>' : '') +
-      (extra || '') + (link ? '<p class="row-note">后台：' + link + '</p>' : '') + '</section>';
+  // 紧急程度：服务连不上 → 服务器连不上 → 7 天内到期（合同的警告线）→ 服务器资源 → 额度 → 8 天以上到期。
+  // 同一档里资源和额度按用量百分比从高到低，到期按剩余天数从少到多，再按页面上的先后
+  var RES_ID = /^(server\.[a-z0-9_]+|aliyun\.[a-f0-9]{24})\.(cpu|memory|disk|traffic|host_traffic)$/;
+  function urgency(r, i) {
+    var e = r.e;
+    var rank, key = 0;
+    if (r.live) rank = /^service\./.test(r.id) ? 0 : 1;
+    else if (/expiry_days$/.test(r.id)) {
+      var d = e.used === null ? null : remainingDays(e);
+      rank = d !== null && d <= 7 ? 2 : 5;
+      key = d === null ? 1e9 : d;
+    } else {
+      rank = RES_ID.test(r.id) ? 3 : 4;
+      key = e.pct === null || e.pct === undefined ? 0 : -e.pct;
+    }
+    return { r: r, rank: rank, key: key, i: i };
+  }
+  function byUrgency(list) {
+    return list.map(urgency).sort(function (a, b) { return a.rank - b.rank || a.key - b.key || a.i - b.i; }).map(function (o) { return o.r; });
   }
 
-  // 第二版 aliyunServers：形状不对就当没有，不让整页出错
+  // 最要紧的前三项点名，多出来的写「另 N 项」。
+  // 每个名字和它后面的标点（「、」或「，另 N 项」）包成一段整体换行，标点不会落到行首
+  function namesLine(list) {
+    var sorted = byUrgency(list);
+    var top = sorted.slice(0, BANNER_NAMES);
+    var more = sorted.length > BANNER_NAMES ? '<span class="banner-more">，另 ' + (sorted.length - BANNER_NAMES) + ' 项</span>' : '';
+    var html = top.map(function (r, i) {
+      var tail = i < top.length - 1 ? '<span class="sep">、</span>' : more;
+      return '<span class="banner-item"><a href="#' + r.anchor + '" data-jump="' + r.anchor + '">' + esc(r.name) + '</a>' + tail + '</span>';
+    }).join('');
+    return '<p class="banner-names">' + html + '</p>';
+  }
+
+  function bannerHtml(t, head, rest) {
+    return '<section class="banner" data-t="' + t + '" aria-live="polite"><span class="banner-mark" aria-hidden="true"></span><div class="banner-body"><p class="banner-head">' + esc(head) + '</p>' + rest + '</div></section>';
+  }
+
+  // ---------- 页面 ----------
+
   function readAliyun(raw, t) {
-    instanceOf = {};
     if (!raw || typeof raw !== 'object' || !Array.isArray(raw.instances)) return null;
     var metrics = [];
     var instances = raw.instances.filter(function (inst) {
       return inst && typeof inst.id === 'string' && /^[a-f0-9]{24}$/.test(inst.id) && Array.isArray(inst.metrics);
     }).map(function (inst) {
-      var label = ALI_TYPES[inst.type] || '阿里云服务器';
-      var instName = typeof inst.name === 'string' && inst.name ? inst.name : '未命名实例';
-      var title = inst.alias === 'aleg' ? ALI_TYPES.swas : label + ' ' + instName;
-      var info = { id: inst.id, type: inst.type, alias: inst.alias, name: instName, regionId: String(inst.regionId || ''),
-        status: inst.status, billingMode: inst.billingMode, title: title, fullTitle: title };
       inst.metrics.forEach(function (m) {
         if (!m || typeof m.id !== 'string' || m.id.indexOf('aliyun.' + inst.id + '.') !== 0) return;
-        instanceOf[m.id] = info;
         metrics.push(evaluate(m, t));
       });
-      return info;
+      return { id: inst.id, alias: inst.alias, name: typeof inst.name === 'string' && inst.name ? inst.name : '阿里云实例', status: inst.status };
     });
     var status = STATUSES.indexOf(raw.status) >= 0 ? raw.status : '未知';
-    // 一台都没读到又不是正常：给一个整体项，让总数和「另有 N 项」不漏掉它
     var entry = !instances.length && status !== '正常'
       ? evaluate({ id: 'aliyunServers', label: '阿里云服务器', status: status, reason: raw.reason || null, used: null, limit: null, collectedAt: raw.collectedAt || null }, t)
       : null;
-    return { instances: instances, metrics: metrics, entry: entry, collectedAt: raw.collectedAt || null, complete: raw.complete === true,
-      counts: raw.counts, failures: Array.isArray(raw.failures) ? raw.failures : [] };
+    return { instances: instances, metrics: metrics, entry: entry };
   }
-
-  // 阿里云实例：每台一块，台数按快照；aleg 沿用「阿里云轻量服务器」块名，其余写类型 + 实例名
-  function aliyunBlocks(ali, byId) {
-    if (!ali) return { html: '', list: [], meta: '' };
-    var swasLink = linkHtml(HOST_CONSOLE.aleg[0], HOST_CONSOLE.aleg[1]);
-    var all = [];
-    var html = ali.instances.map(function (inst) {
-      var list = ALI_ORDER.map(function (k) { return byId['aliyun.' + inst.id + '.' + k]; }).filter(Boolean);
-      all = all.concat(list);
-      var meta = [inst.alias === 'aleg' ? inst.name : '', ALI_REGIONS[inst.regionId] || inst.regionId, ALI_STATES[inst.status] || ALI_STATES.Unknown, ALI_BILLING[inst.billingMode] || ALI_BILLING.unknown].filter(Boolean);
-      return hostBlock(inst.title, list, meta.join('，'), '', inst.type === 'swas' ? swasLink : '');
-    }).join('');
-    // 一台都没读到：整块写原因，计入总数（整体项在 readAliyun 里建）
-    if (!ali.instances.length && ali.entry) {
-      all.push(ali.entry);
-      html = '<section class="host" aria-label="阿里云服务器"><div class="host-head"><h3 class="host-title">阿里云服务器</h3>' + badge(ali.entry.status) + '</div>' +
-        '<p class="row-note">' + esc(missingText(ali.entry)) + '</p>' + (swasLink ? '<p class="row-note">后台：' + swasLink + '</p>' : '') + '</section>';
-    }
-    return { html: html, list: all, meta: aliyunSummary(ali) };
-  }
-
-  function aliyunSummary(ali) {
-    if (!ali.collectedAt) return '';
-    var c = ali.counts || {};
-    var n = function (k) { return typeof c[k] === 'number' ? c[k] + ' 台' : '台数未知'; };
-    var text = (ali.complete ? '阿里云实例每天自动发现一次：' : '阿里云实例发现不完整，下面只列出读到的：') + '轻量 ' + n('swas') + '，ECS ' + n('ecs');
-    var fails = (ali.failures || []).map(function (f) {
-      var where = f.regionId ? (ALI_REGIONS[f.regionId] || f.regionId) + ' ' : '';
-      return where + (f.type === 'ecs' ? 'ECS ' : '轻量') + (ALI_ACTIONS[f.action] || '数据') + (f.reason === 'permission_denied' ? '没有权限' : '读取失败');
-    });
-    if (fails.length > 3) fails = fails.slice(0, 3).concat('等 ' + fails.length + ' 处');
-    return text + (fails.length ? '；' + fails.join('，') : '');
-  }
-
-  function serverCard(byId, ali) {
-    var swas = linkHtml('阿里云轻量应用服务器控制台', 'https://swas.console.aliyun.com/#/servers');
-    var all = [];
-    var aliyun = aliyunBlocks(ali, byId);
-    var blocks = HOSTS.map(function (h) {
-      var list = h[2].map(function (k) { return byId[k.charAt(0) === '@' ? k.slice(1) : 'server.' + h[0] + '.' + k]; }).filter(Boolean);
-      // 阿里云实例接在 RakSmart 后面，旧版的固定 aleg 块只在旧快照里出现
-      var after = h[0] === 'raksmart' ? aliyun.html : '';
-      if (!list.length) return after;
-      all = all.concat(list);
-      var link = HOST_CONSOLE[h[0]] ? linkHtml(HOST_CONSOLE[h[0]][0], HOST_CONSOLE[h[0]][1]) : '';
-      var extra = h[0] === 'cloady' ? '<p class="row-note">用量取自 Cloady 官方接口，正式单位还在核对</p>' : '';
-      var rows = list;
-      var meta = '';
-      var vps = list.filter(function (e) { return e.m.source === 'vps'; });
-      if (vps.length) {
-        // 本机上报一项都没收到：一行写清，不逐行重复同一句原因
-        var silent = vps.length > 1 && vps.every(function (e) { return e.used === null && e.status === vps[0].status && e.reason === vps[0].reason; });
-        if (silent) {
-          rows = list.filter(function (e) { return e.m.source !== 'vps'; });
-          meta = vps.map(shortName).join('、') + '：' + missingText(vps[0]);
-        } else extra = '<p class="row-note">CPU、内存、磁盘、运行时间和本机流量由这台 VPS 自己上报</p>';
-      }
-      return hostBlock(h[1], list, meta, extra, link, rows) + after;
-    }).join('');
-    all = all.concat(aliyun.list);
-    // 旧版快照没有服务器指标
-    if (!all.length) return card('server', [], '<p class="empty">快照里还没有服务器的指标，请先到 ' + swas + ' 查看。</p>');
-    return card('server', all, (aliyun.meta ? '<p class="card-meta">' + esc(aliyun.meta) + '</p>' : '') + '<div class="hosts">' + blocks + '</div>',
-      '连通只说明地址端口连得上，不代表服务可用或有人在线');
-  }
-
-  function domainCard(byId) {
-    var doms = DOMAINS.map(function (d) { return byId['domain.' + d[0] + '.expiry_days']; }).filter(Boolean);
-    var prices = DOMAINS.map(function (d) { return byId['domain.' + d[0] + '.renewal_price']; }).filter(Boolean);
-    var certs = CERTS.map(function (c) { return byId['cert.' + c[0] + '.expiry_days']; }).filter(Boolean);
-    if (!doms.length && !certs.length) return '';
-    var t = groupTimeOf(doms.concat(certs));
-    var inner = '';
-    if (doms.length) {
-      inner += '<h3 class="sub-title">域名（公开 WHOIS，只有日期）</h3><ul class="rows">' + doms.map(function (e) {
-        var p = byId[e.id.replace('.expiry_days', '.renewal_price')];
-        var extra = [];
-        if (p) extra.push(p.used === null ? '续费价' + (p.status === '未接' ? '待填' : missingText(p)) : '续费参考价 ' + fmt(p.m.unit, p.used) + (p.m.asOf ? '（截至 ' + dayLabel(p.m.asOf) + ' 手填）' : ''));
-        return expiryRow(e, t, null, extra);
-      }).join('') + '</ul>';
-    }
-    if (certs.length) inner += '<h3 class="sub-title">网站证书</h3><ul class="rows">' + certs.map(function (e) { return expiryRow(e, t); }).join('') + '</ul>';
-    return card('domain', doms.concat(prices, certs), inner, '30 天内关注，7 天内警告，1 天内紧急');
-  }
-
-  function payCard(byId) {
-    var all = [];
-    var groups = PAYMENTS.map(function (p) {
-      return [p[1], PAY_FIELDS.map(function (f) { return byId['payments.' + p[0] + '.' + f[0]]; }).filter(Boolean), PAY_FIELDS];
-    });
-    groups.push(['GitHub Actions', pick(byId, ['github.actions_minutes', 'github.artifact_storage'])]);
-    var inner = groups.map(function (g) {
-      var list = g[1];
-      if (!list.length) return '';
-      all = all.concat(list);
-      var url = list[0].m.consoleUrl;
-      var head = '<div class="host-head"><h3 class="host-title">' + esc(g[0]) + '</h3>' + badge(worst(list)) + '</div>';
-      // 全部没数：一行列出项目名和后台链接，不逐行重复「未接」
-      if (list.every(function (e) { return e.used === null; })) {
-        var names = list.map(function (e) { return shortName(e).replace(/^(Creem|支付宝)本月/, '').replace(/^GitHub Actions /, ''); });
-        return '<section class="host">' + head + '<p class="row-note">' + esc(names.join('、') + '：' + missingText(list[0])) + (url ? '，' + linkHtml('去后台看', url) : '') + '</p></section>';
-      }
-      var t = groupTimeOf(list);
-      return '<section class="host">' + head + '<ul class="rows">' + list.map(function (e) { return valueRow(e, t); }).join('') + '</ul></section>';
-    }).join('');
-    if (!all.length) return '';
-    return card('pay', all, '<div class="stack">' + inner + '</div>');
-  }
-
-  function manualCard(byId) {
-    var all = [];
-    var rows = MANUALS.map(function (m) {
-      var exp = byId['manual.' + m[0] + '.expiry_days'];
-      var price = byId['manual.' + m[0] + '.annual_price'];
-      var seats = m[0] === 'feishu' ? byId['manual.feishu.seats'] : null;
-      [exp, price, seats].forEach(function (e) { if (e) all.push(e); });
-      if (!exp) return '';
-      var extra = [];
-      if (price) extra.push(price.used === null ? '年费待填' : '年费 ' + fmt('CNY', price.used) + (price.m.asOf && price.m.asOf !== exp.m.asOf ? '（截至 ' + dayLabel(price.m.asOf) + '）' : ''));
-      if (seats) extra.push(seats.used === null ? '席位待填' : '席位 ' + fmt('个', seats.used));
-      return expiryRow(exp, null, m[1], extra);
-    }).join('');
-    if (!all.length) return '';
-    return card('manual', all, '<ul class="rows">' + rows + '</ul>', '你本人填的到期日和价格，截至日以后的变化这里看不到', true);
-  }
-
-  function businessCard(byId, budget) {
-    var active = pick(byId, ['business.recent_hour', 'business.today']);
-    var members = pick(byId, ['business.members.free', 'business.members.monthly', 'business.members.quarterly', 'business.members.yearly', 'business.members.trial', 'business.members.manual', 'business.members.other']);
-    var all = active.concat(members);
-    var t = groupTimeOf(all);
-    var tiles = '<ul class="tiles">' + active.map(function (e) {
-      var v = e.used === null ? '<span class="tile-v is-missing">' + esc(missingText(e)) + '</span>' : '<span class="tile-v">' + num(e.id, '', e.used) + '</span>';
-      var notes = stateNote(e, t);
-      return '<li class="tile"><span class="tile-k">' + esc(shortName(e)) + '（台）</span>' + v +
-        '<span class="tile-n">' + (e.status === '正常' ? '' : badge(e.status)) + (notes.length ? '<span>' + esc(notes.join('，')) + '</span>' : '') + '</span></li>';
-    }).join('') + '</ul>';
-    var memberTime = groupTimeOf(members);
-    var memberList = members.length ? '<h3 class="sub-title">当前有效权益（账号）</h3><ul class="rows">' + members.map(function (e) { return countRow(e, memberTime); }).join('') + '</ul>' +
-      '<p class="row-note">试用和手动发放不是付费用户。账号数和报到电脑数是两种单位，不能相加。</p>' : '';
-    var budgetHtml = '';
-    if (budget && typeof budget.limit === 'number' && budget.limit > 0 && typeof budget.used === 'number') {
-      var pct = budget.used / budget.limit * 100;
-      var p = Math.max(0, Math.min(100, pct));
-      budgetHtml = '<h3 class="sub-title">本机报到统计的读行预算</h3><ul class="rows"><li class="row">' +
-        '<div class="row-head"><span class="row-name">' + esc((dayLabel(budget.day) ? dayLabel(budget.day) + '（UTC 日）' : '今日') + '已用') + '</span><span class="row-right"><span class="row-pct">' + num('budget:pct', 'pct', pct) + '</span></span></div>' +
-        '<div class="meter" data-k="budget:bar" data-p="' + p + '" style="--p:' + p + '%" aria-hidden="true"><span class="meter-fill"></span></div>' +
-        '<p class="row-fig">已用 <b>' + num('budget', '行', budget.used) + '</b> / 预算 ' + esc(fmt('行', budget.limit)) +
-        (budget.used > budget.limit ? '<span class="gap"> </span><span class="nw">超出 <b>' + num('budget:over', '行', budget.used - budget.limit) + '</b></span>，之后的查询会跳过' : '<span class="gap"> </span><span class="nw">剩余 <b>' + num('budget:left', '行', budget.limit - budget.used) + '</b></span>') + '</p>' +
-        '<p class="row-note">只算本机采集的查询，已经包含在 Cloudflare 的 D1 读行里，不要相加</p></li></ul>';
-    }
-    return card('business', all, tiles + memberList + budgetHtml, '只看趋势，没有人数上限');
-  }
-
-  function backendCard() {
-    return '<section class="card" aria-labelledby="g-backend"><div class="card-head"><h2 class="card-title" id="g-backend">只能在后台看的</h2></div>' +
-      '<p class="card-meta">这些服务没有接入本页，点名称打开官方后台</p><ul class="links">' + BACKEND.map(function (b) {
-        var title = b[1] ? '<a href="' + esc(b[1]) + '" target="_blank" rel="noopener noreferrer">' + esc(b[0]) + '</a>' : '<span class="row-name">' + esc(b[0]) + '</span>';
-        return '<li>' + title + '<p>' + esc(b[2]) + '</p></li>';
-      }).join('') + '</ul></section>';
-  }
-
-  // ---------- 总览 ----------
-
-  function overview(list) {
-    var counts = {};
-    list.forEach(function (e) { counts[e.status] = (counts[e.status] || 0) + 1; });
-    var order = COUNT_ORDER.slice();
-    if (counts['未知']) order.splice(5, 0, '未知');
-    var tiles = '<ul class="counts">' + order.map(function (s) {
-      var n = counts[s] || 0;
-      return '<li class="count" data-zero="' + (n ? 0 : 1) + '"><span class="count-n num">' + n + '</span><span class="count-k"><span class="dot" data-s="' + s + '" aria-hidden="true"></span>' + s + '</span></li>';
-    }).join('') + '</ul>';
-
-    var watch = list.filter(function (e) { return e.status === '警告' || e.status === '关注'; });
-    watch.sort(function (a, b) { return SEVERITY[b.status] - SEVERITY[a.status] || (b.pct || 0) - (a.pct || 0); });
-    var items = watch.map(function (e) {
-      var unit = e.m.unit || '';
-      var main = '';
-      var sub = '';
-      if (isExpiry(e) && e.used !== null) main = daysText(remainingDays(e));
-      else if (e.m.unit === '布尔') main = e.used === 0 ? '连不上' : '';
-      else if (e.limit === 0) main = '无可用额度';
-      else if (e.pct !== null) {
-        main = fmt('pct', e.pct);
-        sub = e.used > e.limit ? '超出 ' + fmt(unit, e.used - e.limit) : '剩余 ' + fmt(unit, e.limit - e.used);
-      } else if (e.used !== null) main = fmt(unit, e.used);
-      return '<li class="watch-item"><span class="watch-name">' + esc(name(e)) + '</span>' +
-        '<span class="watch-fig"><span class="pct">' + esc(main) + '</span>' + badge(e.status) + '</span>' +
-        '<span class="watch-src">' + esc(GROUP_NAMES[groupOf(e.id)] || '') + '</span><span class="watch-src watch-sub">' + esc(sub) + '</span></li>';
-    }).join('');
-    // 停更、失败、未接、未知的项最新用量不明，不能让「没有要留意的」盖过去
-    var dark = ['未更新', '失败', '未接', '未知'].filter(function (s) { return counts[s]; })
-      .map(function (s) { return counts[s] + ' 项' + s; });
-    var darkNote = dark.length ? '<p class="watch-dark">另有 ' + esc(dark.join('，')) + '，这些项现在的用量不知道，不算在上面。</p>' : '';
-    var watchCard = '<section class="card overview" aria-labelledby="g-watch"><div class="card-head"><h2 class="card-title" id="g-watch">需要留意</h2></div>' +
-      (items ? '<ul class="watch-list">' + items + '</ul>' : '<p class="watch-empty">' + (dark.length ? '有数的项目都没到关注线。' : '没有到关注线的项目。') + '</p>') + darkNote +
-      '<ul class="legend" aria-label="图例"><li><span class="legend-tick"></span>刻度线：50% 关注，80% 警告</li>' +
-      '<li><span class="legend-bar" style="background:var(--fill-ok)"></span>正常</li>' +
-      '<li><span class="legend-bar" style="background:var(--fill-watch)"></span>关注</li>' +
-      '<li><span class="legend-bar" style="background:var(--fill-warn)"></span>警告</li></ul></section>';
-    return '<div class="top">' + tiles + watchCard + '</div>';
-  }
-
-  function groupOf(id) {
-    if (ALI_ID.test(id) || id === 'aliyunServers') return 'server';
-    if (id.indexOf('cf.') === 0) return 'cloudflare';
-    if (id.indexOf('aliyun.') === 0 || id.indexOf('huawei.') === 0) return 'aliyun';
-    if (id.indexOf('mail.') === 0 || id.indexOf('sms.') === 0 || id.indexOf('tencent_ses.') === 0) return 'mail';
-    if (id.indexOf('domain.') === 0 || id.indexOf('cert.') === 0) return 'domain';
-    if (id.indexOf('payments.') === 0 || id.indexOf('github.') === 0) return 'pay';
-    if (id.indexOf('manual.') === 0) return 'manual';
-    if (id.indexOf('business.') === 0) return 'business';
-    if (id.indexOf('server.') === 0) return 'server';
-    return '';
-  }
-
-  // ---------- 页面 ----------
 
   function headHtml(snap, t) {
     var line = '';
     if (snap && snap.generatedAt && isFinite(Date.parse(snap.generatedAt))) {
-      var age = t - Date.parse(snap.generatedAt);
-      line = '数据时间 <strong class="num">' + esc(beijing(snap.generatedAt)) + '</strong>（北京时间），';
-      if (age < 0) line += '<span class="head-stale">快照时间晚于本机时间，请核对电脑时钟</span>';
-      else if (age > 30 * 60000) line += '<span class="head-stale">已停更 ' + esc(duration(age)) + '</span>';
-      else line += esc(duration(age)) + '前生成';
-    } else if (loadProblem) {
-      line = '没有可显示的数据';
-    } else {
-      line = '正在读取快照';
+      line = '<span class="num">' + esc(beijing(snap.generatedAt)) + '</span> 更新';
     }
-    return '<header class="head"><h1 class="title">运营状态</h1><p class="head-line">' + line + '</p></header>';
+    var tag = snap && snap.mode === 'fixture' ? '<span class="tag">演示数据</span>' : '';
+    return '<header class="head"><h1 class="head-title">运营状态</h1><p class="head-line">' + line + tag + '</p></header>';
+  }
+
+  function openFolds() {
+    var set = {};
+    app.querySelectorAll('details[data-fold]').forEach(function (d) { if (d.open) set[d.getAttribute('data-fold')] = true; });
+    return set;
   }
 
   function render() {
     var t = now();
-    var html = headHtml(snapshot, t);
-    if (loadProblem) {
-      html += '<p class="notice">' + esc(loadProblem) + (snapshot ? '<small>下面是上次读到的内容。</small>' : '') + '</p>';
-    }
+    registry = [];
+    registered = {};
+    var openSet = rendered ? openFolds() : {};
+    var body = '';
     if (snapshot) {
-      if (snapshot.mode === 'fixture') html += '<p class="notice">演示数据：由离线夹具生成，不是真实账号的数字。</p>';
       var list = (Array.isArray(snapshot.metrics) ? snapshot.metrics : [])
         .filter(function (m) { return m && typeof m.id === 'string'; })
         .map(function (m) { return evaluate(m, t); });
@@ -921,18 +806,16 @@
       if (ali) list = list.concat(ali.metrics, ali.entry ? [ali.entry] : []);
       var byId = {};
       list.forEach(function (e) { byId[e.id] = e; });
-      html += overview(list);
-      // 手机按顺序一列；宽屏：Cloudflare 左列，余额 / 邮件短信 / 报到右列；服务器整行；域名证书左、付款与手填右
-      var lower = domainCard(byId);
-      var right = payCard(byId) + manualCard(byId);
-      html += '<div class="stack"><div class="groups"><div class="col">' + cloudflareCard(byId) + '</div><div class="col">' +
-        aliyunCard(byId) + mailCard(byId) + businessCard(byId, snapshot.businessReadBudget) + '</div></div>' +
-        serverCard(byId, ali) +
-        (lower || right ? '<div class="groups"><div class="col">' + lower + '</div><div class="col">' + right + '</div></div>' : '') +
-        backendCard() + '</div>';
-      html += '<footer class="foot"><p>上限按 Cloudflare 免费版、R2 标准存储和 DirectMail 初始赠额参考，不是从账号识别出的套餐。</p>' +
-        '<p>页面每分钟重新读取一次快照；某一项超过它的更新周期两倍还没有新数据，就标为未更新。</p></footer>';
+      var hosts = hostsOf(byId, ali);
+      var live = '<section class="sec" aria-labelledby="h-live"><h2 class="sec-title" id="h-live">实时状态</h2><div class="lives-grid">' +
+        servicesCard(byId) + serversCard(hosts) + '</div></section>';
+      var res = resourcesSection(hosts);
+      var use = usageSection(byId, openSet);
+      var money = moneySection(byId);
+      var folds = expiryFold(byId, ali, openSet) + businessFold(byId, snapshot.businessReadBudget, openSet) + linksFold(list, openSet);
+      body = live + res + '<div class="pair">' + use + money + '</div>' + '<div class="folds">' + folds + '</div>';
     }
+    var html = headHtml(snapshot, t) + banner(snapshot, t) + body;
     var old = rendered ? collect() : null;
     app.innerHTML = html;
     if (old) animateFrom(old);
@@ -940,7 +823,22 @@
     rendered = true;
   }
 
-  // ---------- 动效：只在两次读取之间数值变化时，数字和用量条轻过渡；减少动态效果时直接终态 ----------
+  // 横幅里点名字：所在的折叠先展开，再滚到那一行，那一行留一个浅底
+  app.addEventListener('click', function (ev) {
+    var a = ev.target.closest ? ev.target.closest('a[data-jump]') : null;
+    if (!a) return;
+    var el = document.getElementById(a.getAttribute('data-jump'));
+    if (!el) return;
+    ev.preventDefault();
+    var d = el.closest('details');
+    if (d) d.open = true;
+    app.querySelectorAll('.is-target').forEach(function (x) { x.classList.remove('is-target'); });
+    el.classList.add('is-target');
+    el.scrollIntoView({ behavior: reduceMotion.matches ? 'auto' : 'smooth', block: 'center' });
+    if (history.replaceState) history.replaceState(null, '', '#' + el.id);
+  });
+
+  // ---------- 动效：只在两次读取之间数值变化时，数字和横条轻过渡；减少动态效果时直接终态 ----------
 
   function collect() {
     var map = {};
@@ -975,13 +873,14 @@
       if (el.hasAttribute('data-p')) {
         var to = Number(el.getAttribute('data-p'));
         if (old[key] === to) return;
-        // 先放回旧宽度，下一帧切到新值，由 CSS 过渡 clip-path
+
         el.style.setProperty('--p', old[key] + '%');
         requestAnimationFrame(function () { requestAnimationFrame(function () { el.style.setProperty('--p', to + '%'); }); });
         return;
       }
       var target = Number(el.getAttribute('data-v'));
-      if (old[key] === target || !isFinite(old[key])) return;
+      // 「已用 / 上限」这类拼过的文字不逐帧改写，直接换
+      if (old[key] === target || !isFinite(old[key]) || el.textContent !== fmt(el.getAttribute('data-f'), target)) return;
       numbers.push({ el: el, from: old[key], to: target, kind: el.getAttribute('data-f') });
     });
     if (!numbers.length) return;
@@ -1010,7 +909,7 @@
       var data;
       try { data = JSON.parse(text); } catch (err) { throw new Error('format'); }
       if (!data || typeof data !== 'object') throw new Error('format');
-      // 1 是旧快照（固定 aleg / server.expiry_days），2 加了 aliyunServers 和 RakSmart 本机上报；两种都照常显示
+
       if (data.schemaVersion !== 1 && data.schemaVersion !== 2) throw new Error('version:' + String(data.schemaVersion));
       if (!Array.isArray(data.metrics)) throw new Error('format');
       snapshot = data;
@@ -1018,9 +917,9 @@
       render();
     }).catch(function (err) {
       var msg = String(err && err.message || '');
-      if (msg.indexOf('version:') === 0) loadProblem = '快照版本 ' + msg.slice(8) + ' 不受支持，这个页面需要更新后才能显示。';
-      else if (msg === 'format') loadProblem = '快照文件格式不对，读不出数字。';
-      else loadProblem = '读不到快照文件，可能是网络断了或采集电脑还没上传。';
+      if (msg.indexOf('version:') === 0) loadProblem = '快照版本 ' + msg.slice(8) + ' 不受支持，页面要更新';
+      else if (msg === 'format') loadProblem = '快照格式不对';
+      else loadProblem = '读不到快照文件';
       render();
     });
   }

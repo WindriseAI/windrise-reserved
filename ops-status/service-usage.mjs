@@ -2,6 +2,7 @@ import { aliyunKey, cloudflareKey } from './credentials.mjs';
 import { requestJson, rpc, signedRpcV3 } from './http.mjs';
 import { freshValue, number } from './model.mjs';
 import { CLOUDFLARE_DOMAINS, domainSlug } from './extra-catalog.mjs';
+import { issueCode } from './reasons.mjs';
 
 export async function collectSms(key, config, fetchImpl, now) {
   aliyunKey(key);
@@ -23,9 +24,9 @@ export async function collectSms(key, config, fetchImpl, now) {
       for (const [name, used] of Object.entries({ sent, success, failed })) values[`sms.${period}.${name}`] = freshValue(used, now);
       if (period === 'month') {
         if (typeof config.smsUnitPrice === 'number' && Number.isFinite(config.smsUnitPrice) && config.smsUnitPrice >= 0) values['sms.month.estimated_cost'] = freshValue(Math.round(sent * config.smsUnitPrice * 1000000) / 1000000, now);
-        else issues['sms.month.estimated_cost'] = 'dataset_unavailable';
+        else issues['sms.month.estimated_cost'] = 'rate_not_configured';
       }
-    } catch { for (const name of ['sent', 'success', 'failed']) issues[`sms.${period}.${name}`] = 'collection_failed'; if (period === 'month') issues['sms.month.estimated_cost'] = 'collection_failed'; }
+    } catch (error) { for (const name of ['sent', 'success', 'failed']) issues[`sms.${period}.${name}`] = issueCode(error); if (period === 'month') issues['sms.month.estimated_cost'] = issueCode(error); }
   }
   return { values, issues };
 }
@@ -55,7 +56,7 @@ export async function collectSmsPackages(key, fetchImpl, now) {
 export async function collectCfResources(key, fetchImpl, now) {
   cloudflareKey(key);
   const headers = { authorization: `Bearer ${key.apiToken}` };
-  const get = async route => { const body = await requestJson(fetchImpl, `https://api.cloudflare.com/client/v4${route}`, { method: 'GET', headers }); if (body.success !== true) throw new Error('collection_failed'); return body; };
+  const get = async route => { const body = await requestJson(fetchImpl, `https://api.cloudflare.com/client/v4${route}`, { method: 'GET', headers }); if (body.success !== true) throw new Error(body.errors?.some(row => [10000, 9109].includes(row.code)) ? 'permission_denied' : 'collection_failed'); return body; };
   const values = {}; const issues = {};
   try {
     let count = 0;
@@ -66,7 +67,7 @@ export async function collectCfResources(key, fetchImpl, now) {
       if (page >= body.result_info.total_pages) { if (count !== body.result_info.total_count) throw new Error('dataset_unavailable'); values['cf.tunnels'] = freshValue(count, now); break; }
       if (page === 100) throw new Error('dataset_unavailable');
     }
-  } catch { issues['cf.tunnels'] = 'collection_failed'; }
+  } catch (error) { issues['cf.tunnels'] = issueCode(error); }
   for (const domain of CLOUDFLARE_DOMAINS) {
     const id = `cf.dns.${domainSlug(domain)}`;
     try {
@@ -75,7 +76,7 @@ export async function collectCfResources(key, fetchImpl, now) {
       const body = await get(`/zones/${zones.result[0].id}/dns_records/usage`);
       const used = number(body.result?.record_usage); const quota = body.result?.record_quota;
       values[id] = freshValue(used, now, { limit: quota === null ? null : number(quota) });
-    } catch { issues[id] = 'collection_failed'; }
+    } catch (error) { issues[id] = issueCode(error); }
   }
   return { values, issues };
 }

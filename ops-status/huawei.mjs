@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import { requestJson, encode } from './http.mjs';
 import { freshValue, number } from './model.mjs';
+import { issueCode } from './reasons.mjs';
 
 export function signedHuaweiRequest(endpoint, route, key, now, { method = 'GET', query = {}, body } = {}) {
   const text = body === undefined ? '' : JSON.stringify(body);
@@ -20,7 +21,7 @@ async function api(key, now, fetchImpl, route, options = {}, endpoint = 'bss.myh
   validateKey(key);
   const request = signedHuaweiRequest(endpoint, route, key, now, options);
   const body = await requestJson(fetchImpl, request.url, request.options);
-  if (body.error_code !== undefined) throw new Error('collection_failed');
+  if (body.error_code !== undefined) throw new Error(/forbidden|denied|unauthoriz|permission/i.test(String(body.error_code)) ? 'permission_denied' : 'collection_failed');
   return body;
 }
 export async function collectHuaweiBalance(key, fetchImpl, now) {
@@ -86,12 +87,13 @@ export async function collectHuaweiMonitor(host, key, fetchImpl, now) {
     try {
       const body = await api(key, now, fetchImpl, `/V1.0/${target.projectId}/metric-data`, { query: { namespace, metric_name: metric, 'dim.0': `instance_id,${target.serverId}`, from: now - 900000, to: now, period: 300, filter: 'average' } }, `ces.${target.regionId}.myhuaweicloud.com`);
       const rows = body.datapoints;
-      if (!Array.isArray(rows) || rows.length === 0) throw new Error('dataset_unavailable');
+      if (!Array.isArray(rows)) throw new Error('dataset_unavailable');
+      if (rows.length === 0) throw new Error(name === 'cpu' ? 'empty_dataset' : 'agent_no_data');
       const latest = rows.reduce((a, b) => a.timestamp > b.timestamp ? a : b);
       const at = number(latest.timestamp); const used = number(latest.average);
       if (at > now || now - at > 900000 || used > 100) throw new Error('dataset_unavailable');
       values[id] = freshValue(used, at);
-    } catch { issues[id] = 'dataset_unavailable'; }
+    } catch (error) { issues[id] = issueCode(error); }
   }
   return { values, issues };
 }
